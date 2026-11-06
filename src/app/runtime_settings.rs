@@ -260,11 +260,10 @@ impl RuntimeSettings {
         Ok(engine)
     }
 
-    /// The models this account can use; empty when `agy models` fails.
-    pub async fn list_models(&self) -> Vec<ModelOption> {
+    /// An Agy child with the same minimal environment for each query.
+    fn agy_command(&self) -> tokio::process::Command {
         let mut command = tokio::process::Command::new(&self.agy.bin);
         command
-            .arg("models")
             .current_dir(&self.agy.home)
             .env_clear()
             .env("HOME", &self.agy.home)
@@ -274,6 +273,29 @@ impl RuntimeSettings {
         if let Ok(path) = std::env::var("PATH") {
             command.env("PATH", path);
         }
+        command
+    }
+
+    /// Whether Agy accepts this model and effort. `/effort` is answered locally,
+    /// so the check spends no quota. If Agy cannot be asked, the choice stands:
+    /// only a definite refusal is an error.
+    pub async fn engine_is_supported(&self, model: &str, effort: &str) -> bool {
+        let mut command = self.agy_command();
+        command.arg("--model").arg(model);
+        if !effort.is_empty() {
+            command.arg("--effort").arg(effort);
+        }
+        command.arg("-p").arg("/effort");
+        match tokio::time::timeout(std::time::Duration::from_secs(30), command.output()).await {
+            Ok(Ok(output)) => output.status.success(),
+            _ => true,
+        }
+    }
+
+    /// The models this account can use; empty when `agy models` fails.
+    pub async fn list_models(&self) -> Vec<ModelOption> {
+        let mut command = self.agy_command();
+        command.arg("models");
         match tokio::time::timeout(std::time::Duration::from_secs(30), command.output()).await {
             Ok(Ok(output)) if output.status.success() => {
                 parse_models(&String::from_utf8_lossy(&output.stdout))

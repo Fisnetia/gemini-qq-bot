@@ -63,7 +63,7 @@ export default function Settings() {
       setNotice("已保存。会话下次启动时生效；要立刻生效，请到群管理重置对应会话。");
       await reload();
     } catch {
-      setNotice("保存失败：请检查模型名和思考强度。");
+      setNotice("保存失败：这个模型可能不支持所选思考强度，请改选“模型默认”。");
     }
   }
 
@@ -121,7 +121,8 @@ export default function Settings() {
         <h2 id="s-engine">主模型</h2>
         <p className="muted">
           这里决定群聊和私聊会话用的模型与思考强度。更强的模型或更高的强度通常
-          消耗更多额度，也可能回复更慢。辅助会话不受这里影响。
+          消耗更多额度，也可能回复更慢。Claude 和 GPT-OSS 不能调强度，要选“模型默认”。
+          辅助会话不受这里影响。
         </p>
         <label className="field">
           <span>主模型</span>
@@ -137,11 +138,10 @@ export default function Settings() {
         <label className="field">
           <span>思考强度</span>
           <select value={mainEffort} onChange={(e) => setMainEffort(e.target.value)}>
+            <option value="">模型默认</option>
             <option value="low">low</option>
             <option value="medium">medium</option>
             <option value="high">high</option>
-            <option value="xhigh">xhigh</option>
-            <option value="max">max</option>
           </select>
         </label>
         <div className="actions">

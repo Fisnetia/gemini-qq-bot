@@ -482,6 +482,15 @@ async fn api_v1_engine_settings_validate_and_apply() {
     assert_eq!(body["engine"]["model"], json!("gemini-3.8-flash-high"));
     assert_eq!(body["engine"]["effort"], json!("medium"));
 
+    // Empty hands the effort back to the model's own default.
+    let (status, _) = put_json(
+        Arc::clone(&state),
+        "/api/v1/settings/engine",
+        json!({"effort": ""}),
+    )
+    .await;
+    assert_eq!(status, 200);
+
     // A missing agy binary is an empty list, not an error page.
     let body = get_json(state, "/api/v1/settings/engine/models").await;
     assert_eq!(body["models"], json!([]));

@@ -12,9 +12,12 @@ pub fn build_interactive_argv(config: &ResidentConfig) -> Vec<String> {
         config.workspace.display().to_string(),
         "--model".to_string(),
         config.model.clone(),
-        "--effort".to_string(),
-        config.effort.clone(),
     ];
+    // Not every model takes the flag; Agy refuses to start if it gets one anyway.
+    if !config.effort.is_empty() {
+        argv.push("--effort".to_string());
+        argv.push(config.effort.clone());
+    }
     if let Some(id) = &config.conversation_id {
         argv.push("--conversation".to_string());
         argv.push(id.clone());

@@ -272,6 +272,20 @@ done
     path
 }
 
+#[test]
+fn an_empty_effort_leaves_the_flag_out() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let mut config = session_config(
+        dir.path(),
+        PathBuf::from("agy"),
+        dir.path().to_path_buf(),
+        dir.path().to_path_buf(),
+    );
+    assert!(build_interactive_argv(&config).contains(&"--effort".to_string()));
+    config.effort = String::new();
+    assert!(!build_interactive_argv(&config).contains(&"--effort".to_string()));
+}
+
 fn session_config(dir: &Path, bin: PathBuf, home: PathBuf, work: PathBuf) -> ResidentConfig {
     let _ = dir;
     ResidentConfig {

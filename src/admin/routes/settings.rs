@@ -36,8 +36,9 @@ async fn get_settings(State(state): State<Arc<AdminState>>) -> ApiResult {
     }))
 }
 
-/// The efforts `agy --effort` accepts.
-const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+/// Efforts `agy --effort` knows, plus empty for the model's own default. Which
+/// of them a model takes is Agy's call, checked when a choice is saved.
+const EFFORTS: [&str; 6] = ["", "low", "medium", "high", "xhigh", "max"];
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -71,6 +72,16 @@ async fn put_engine(State(state): State<Arc<AdminState>>, Json(body): Json<Value
         && !EFFORTS.contains(&effort.as_str())
     {
         return Err(ApiError::bad_request("invalid_effort"));
+    }
+    let current = state.settings.engine_view();
+    let next_model = model.as_deref().unwrap_or(&current.model);
+    let next_effort = update.effort.as_deref().unwrap_or(&current.effort);
+    if !state
+        .settings
+        .engine_is_supported(next_model, next_effort)
+        .await
+    {
+        return Err(ApiError::bad_request("unsupported_engine"));
     }
     let view = state
         .settings

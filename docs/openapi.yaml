@@ -165,10 +165,13 @@ paths:
               type: object
               properties:
                 model: { type: string, maxLength: 100 }
-                effort: { type: string, enum: [low, medium, high, xhigh, max] }
+                effort:
+                  type: string
+                  enum: ["", low, medium, high, xhigh, max]
+                  description: Empty uses the model's default
       responses:
         "200": { description: Stored }
-        "400": { description: empty_update / invalid_model / invalid_effort }
+        "400": { description: empty_update / invalid_model / invalid_effort / unsupported_engine }
   /api/v1/settings/engine/models:
     get:
       summary: Models available to the Agy account; empty when listing fails
