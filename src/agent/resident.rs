@@ -35,7 +35,7 @@ use nix::sys::signal::{Signal, kill as send_signal, killpg};
 use nix::unistd::Pid;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 
-use crate::agent::agy::{AGY_EFFORT, AgyRunner, settings_path};
+use crate::agent::agy::{AgyRunner, settings_path};
 use crate::agent::barrier::{self, TurnSpec, Verdict};
 use crate::agent::step_stream::{ParseError, ParseResult, StepEvent, parse_steps};
 
@@ -235,6 +235,8 @@ pub struct ResidentConfig {
     pub workspace: PathBuf,
     /// Model id passed through unchanged.
     pub model: String,
+    /// Reasoning effort passed through unchanged.
+    pub effort: String,
     /// Resume this conversation instead of starting a new one.
     pub conversation_id: Option<String>,
     /// How long to wait for a delivered prompt to appear as a `user` step.
@@ -307,6 +309,7 @@ pub struct ResidentSession {
     home: PathBuf,
     bin: PathBuf,
     model: String,
+    effort: String,
     reader: Arc<dyn StepReader>,
     screen: Arc<Mutex<Vec<u8>>>,
     audit: Arc<Mutex<Vec<String>>>,
@@ -387,6 +390,7 @@ impl ResidentSession {
             home: config.home.clone(),
             bin: config.bin.clone(),
             model: config.model.clone(),
+            effort: config.effort.clone(),
             reader,
             screen,
             audit,
@@ -922,6 +926,7 @@ impl ResidentSession {
                 home: self.home.clone(),
                 workspace: self.workspace.clone(),
                 model: self.model.clone(),
+                effort: self.effort.clone(),
                 conversation_id: Some(id.clone()),
                 deliver_timeout_s: self.deliver_timeout.as_secs(),
                 memory_scope: self.memory_scope.clone(),
@@ -952,6 +957,7 @@ impl ResidentSession {
             home: self.home.clone(),
             workspace: self.workspace.clone(),
             model: self.model.clone(),
+            effort: self.effort.clone(),
             conversation_id: None,
             deliver_timeout_s: self.deliver_timeout.as_secs(),
             memory_scope: self.memory_scope.clone(),

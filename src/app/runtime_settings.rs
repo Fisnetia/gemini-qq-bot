@@ -29,6 +29,8 @@ pub struct SettingsOverlay {
     pub aux_api_key: Option<String>,
     pub session_rotation_enabled: Option<bool>,
     pub quota_degradation_enabled: Option<bool>,
+    pub main_model: Option<String>,
+    pub main_effort: Option<String>,
 }
 
 impl SettingsOverlay {
@@ -43,6 +45,42 @@ impl SettingsOverlay {
             .and_then(|raw| serde_json::from_str(&raw).ok())
             .unwrap_or_default()
     }
+}
+
+/// The model and effort main group sessions start with.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct MainEngine {
+    pub model: String,
+    pub effort: String,
+}
+
+/// Shared with the resident manager, which reads it at each session start.
+pub type SharedEngine = Arc<RwLock<MainEngine>>;
+
+/// One line of `agy models`.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ModelOption {
+    pub id: String,
+    pub label: String,
+}
+
+/// Parse `agy models` output; lines that are not `id<TAB>label` are skipped.
+pub fn parse_models(output: &str) -> Vec<ModelOption> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let (id, label) = line.split_once('\t')?;
+            let id = id.trim();
+            let valid = !id.is_empty()
+                && id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'));
+            valid.then(|| ModelOption {
+                id: id.to_string(),
+                label: label.trim().to_string(),
+            })
+        })
+        .collect()
 }
 
 /// The gateway config with the overlay applied.
@@ -109,6 +147,7 @@ pub struct RuntimeSettings {
     rotation_cap: Option<i64>,
     file_rotation_enabled: bool,
     file_degradation_enabled: bool,
+    engine: SharedEngine,
 }
 
 impl RuntimeSettings {
@@ -124,6 +163,7 @@ impl RuntimeSettings {
         rotation_cap: Option<i64>,
         file_rotation_enabled: bool,
         file_degradation_enabled: bool,
+        engine: SharedEngine,
     ) -> Arc<Self> {
         Arc::new(Self {
             path,
@@ -136,6 +176,7 @@ impl RuntimeSettings {
             rotation_cap,
             file_rotation_enabled,
             file_degradation_enabled,
+            engine,
         })
     }
 
@@ -162,6 +203,10 @@ impl RuntimeSettings {
             Some(35),
             true,
             true,
+            Arc::new(RwLock::new(MainEngine {
+                model: "test-model".to_string(),
+                effort: "low".to_string(),
+            })),
         )
     }
 
@@ -182,6 +227,58 @@ impl RuntimeSettings {
             model: config.model,
             session_header: config.session_header,
             api_key_set,
+        }
+    }
+
+    pub fn engine_view(&self) -> MainEngine {
+        self.engine
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Persist and apply the model and effort. Sessions that are already
+    /// running keep theirs until they next start.
+    pub fn update_engine(
+        &self,
+        model: Option<String>,
+        effort: Option<String>,
+    ) -> Result<MainEngine, String> {
+        let mut overlay = self.overlay();
+        let mut engine = self.engine_view();
+        if let Some(model) = model {
+            overlay.main_model = Some(model.clone());
+            engine.model = model;
+        }
+        if let Some(effort) = effort {
+            overlay.main_effort = Some(effort.clone());
+            engine.effort = effort;
+        }
+        self.persist(&overlay)?;
+        *self.overlay.write().unwrap_or_else(|e| e.into_inner()) = overlay;
+        *self.engine.write().unwrap_or_else(|e| e.into_inner()) = engine.clone();
+        Ok(engine)
+    }
+
+    /// The models this account can use; empty when `agy models` fails.
+    pub async fn list_models(&self) -> Vec<ModelOption> {
+        let mut command = tokio::process::Command::new(&self.agy.bin);
+        command
+            .arg("models")
+            .current_dir(&self.agy.home)
+            .env_clear()
+            .env("HOME", &self.agy.home)
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true);
+        if let Ok(path) = std::env::var("PATH") {
+            command.env("PATH", path);
+        }
+        match tokio::time::timeout(std::time::Duration::from_secs(30), command.output()).await {
+            Ok(Ok(output)) if output.status.success() => {
+                parse_models(&String::from_utf8_lossy(&output.stdout))
+            }
+            _ => Vec::new(),
         }
     }
 
@@ -291,6 +388,19 @@ impl RuntimeSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_list_keeps_only_id_and_label_lines() {
+        let parsed = parse_models(
+            "Fetching available models...\n\
+             gemini-3.8-flash-high\tGemini 3.8 Flash (High)\n\
+             bad id\tBad\n\
+             gpt-oss-120b-medium\tGPT-OSS 120B (Medium)\n",
+        );
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].id, "gemini-3.8-flash-high");
+        assert_eq!(parsed[1].label, "GPT-OSS 120B (Medium)");
+    }
 
     #[test]
     fn overlay_round_trips_through_json() {

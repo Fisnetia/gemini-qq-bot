@@ -156,6 +156,18 @@ impl App {
             .parent()
             .map(|dir| dir.join("runtime-settings.json"));
         let settings_overlay = SettingsOverlay::load(settings_path.as_deref());
+        let engine = Arc::new(std::sync::RwLock::new(
+            crate::app::runtime_settings::MainEngine {
+                model: settings_overlay
+                    .main_model
+                    .clone()
+                    .unwrap_or_else(|| config.agy_model.clone()),
+                effort: settings_overlay
+                    .main_effort
+                    .clone()
+                    .unwrap_or_else(|| crate::agent::agy::AGY_EFFORT.to_string()),
+            },
+        ));
         let aux_base_config = AuxGatewayConfig::from_config(&config);
         let aux_config = effective_aux_config(&aux_base_config, &settings_overlay);
         let agy_aux_params = AgyAuxParams {
@@ -262,7 +274,8 @@ impl App {
                 config.agy_model.clone(),
             )
             .with_deliver_timeout_s(config.file.resident_deliver_timeout_s)
-            .with_respawn_backoff_enabled(config.file.respawn_backoff_enabled),
+            .with_respawn_backoff_enabled(config.file.respawn_backoff_enabled)
+            .with_engine(Arc::clone(&engine)),
         );
 
         let running_turns = Arc::new(turn::RunningTurns::new());
@@ -324,6 +337,7 @@ impl App {
             rotation_cap,
             config.file.session_rotation_enabled,
             config.file.quota_degradation_enabled,
+            Arc::clone(&engine),
         );
 
         let executor = Arc::new(TurnExecutor {

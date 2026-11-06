@@ -1,12 +1,19 @@
 import { useEffect, useState } from "react";
-import { apiGet, apiSend, type Settings as SettingsData } from "../api";
+import { apiGet, apiSend, type ModelOption, type Settings as SettingsData } from "../api";
 import { ErrorBox, Loading, Notice, useFetch } from "../ui";
 
 export default function Settings() {
   const { data, error, loading, reload } = useFetch(() =>
     apiGet<SettingsData>("/settings"),
   );
+  const models = useFetch(() =>
+    apiGet<{ models: ModelOption[] }>("/settings/engine/models"),
+  );
   const [notice, setNotice] = useState<string | null>(null);
+
+  // main session engine
+  const [mainModel, setMainModel] = useState("");
+  const [mainEffort, setMainEffort] = useState("low");
 
   // aux form state
   const [enabled, setEnabled] = useState(false);
@@ -22,6 +29,8 @@ export default function Settings() {
 
   useEffect(() => {
     if (!data) return;
+    setMainModel(data.engine.model);
+    setMainEffort(data.engine.effort);
     setEnabled(data.aux.enabled);
     setBaseUrl(data.aux.base_url);
     setModel(data.aux.model);
@@ -43,6 +52,19 @@ export default function Settings() {
     };
     if (apiKey) body.api_key = apiKey;
     return body;
+  }
+
+  const modelOptions = models.data?.models ?? [];
+  const modelListed = modelOptions.some((m) => m.id === mainModel);
+
+  async function saveEngine() {
+    try {
+      await apiSend("PUT", "/settings/engine", { model: mainModel, effort: mainEffort });
+      setNotice("已保存。会话下次启动时生效；要立刻生效，请到群管理重置对应会话。");
+      await reload();
+    } catch {
+      setNotice("保存失败：请检查模型名和思考强度。");
+    }
   }
 
   async function saveAux() {
@@ -95,6 +117,40 @@ export default function Settings() {
 
   return (
     <div>
+      <section className="card" aria-labelledby="s-engine">
+        <h2 id="s-engine">主模型</h2>
+        <p className="muted">
+          这里决定群聊和私聊会话用的模型与思考强度。更强的模型或更高的强度通常
+          消耗更多额度，也可能回复更慢。辅助会话不受这里影响。
+        </p>
+        <label className="field">
+          <span>主模型</span>
+          <select value={mainModel} onChange={(e) => setMainModel(e.target.value)}>
+            {!modelListed && <option value={mainModel}>{mainModel}</option>}
+            {modelOptions.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label}（{m.id}）
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>思考强度</span>
+          <select value={mainEffort} onChange={(e) => setMainEffort(e.target.value)}>
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+            <option value="xhigh">xhigh</option>
+            <option value="max">max</option>
+          </select>
+        </label>
+        <div className="actions">
+          <button type="button" onClick={() => void saveEngine()}>
+            保存主模型
+          </button>
+        </div>
+      </section>
+
       <section className="card" aria-labelledby="s-aux">
         <h2 id="s-aux">辅助模型网关（aux）</h2>
         <p className="muted">

@@ -190,7 +190,18 @@ export interface RuntimeSwitches {
   quota_degradation_enabled: boolean;
 }
 
+export interface MainEngine {
+  model: string;
+  effort: string;
+}
+
+export interface ModelOption {
+  id: string;
+  label: string;
+}
+
 export interface Settings {
   aux: AuxSettings;
   runtime: RuntimeSwitches;
+  engine: MainEngine;
 }

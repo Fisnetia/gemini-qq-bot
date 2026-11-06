@@ -142,6 +142,7 @@ impl ResidentDriver {
             home: self.config.home.clone(),
             workspace,
             model: self.config.model.clone(),
+            effort: crate::agent::agy::AGY_EFFORT.to_string(),
             conversation_id: None,
             deliver_timeout_s: 45,
             memory_scope: None,

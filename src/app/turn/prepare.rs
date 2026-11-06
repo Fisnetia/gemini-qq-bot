@@ -450,7 +450,15 @@ impl TurnExecutor {
             .and_then(|s| s.mood_json.as_deref())
             .and_then(MoodState::from_json)
             .and_then(|m| m.label_or_none().map(|l| l.to_string()));
-        let persona = self.store.get_persona().await.ok().flatten();
+        let private_persona = if crate::onebot::private::private_user_id(&job.group_id).is_some() {
+            self.store.get_private_persona().await.ok().flatten()
+        } else {
+            None
+        };
+        let persona = match private_persona {
+            Some(card) => Some(card),
+            None => self.store.get_persona().await.ok().flatten(),
+        };
 
         if let Ok(stored) = self
             .store

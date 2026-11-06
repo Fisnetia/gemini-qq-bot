@@ -51,7 +51,8 @@ impl TurnExecutor {
         // Group and private routes differ only in whether `group_id` rides along:
         // the OneBot action derives the chat from it. A group poke names both ids;
         // without a group context only the target goes out.
-        let params = if group_id.is_empty() {
+        let is_private = crate::onebot::private::private_user_id(group_id).is_some();
+        let params = if group_id.is_empty() || is_private {
             serde_json::json!({ "user_id": user_id })
         } else {
             serde_json::json!({ "user_id": user_id, "group_id": group_id })
@@ -213,13 +214,10 @@ impl TurnExecutor {
                 None => crate::onebot::action::SendGroupMsg::text(group_id, &row.text),
             }
         };
+        let (action, params) = crate::onebot::private::route_send(group_id, frame.params());
         let outcome = self
             .connection
-            .call(
-                "send_group_msg",
-                frame.params(),
-                std::time::Duration::from_secs(10),
-            )
+            .call(action, params, std::time::Duration::from_secs(10))
             .await;
         let result = crate::pipeline::outbox::classify(outcome);
         let _ = self

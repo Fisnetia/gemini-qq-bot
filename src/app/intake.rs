@@ -30,6 +30,9 @@ use crate::pipeline::outbox::Outbox;
 use crate::pipeline::scheduler::BatchJob;
 use crate::store::SqliteStore;
 
+/// How long the owner's private chat stays quiet before it becomes a turn.
+const PRIVATE_QUIET_SECONDS: i64 = 2;
+
 /// What one inbound frame turned into, for tests and counters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IntakeOutcome {
@@ -405,6 +408,7 @@ impl Intake {
         // A poke of the bot is a notice, not a message; rewrite it into the
         // equivalent message event so it flows down the one path that exists.
         let event = rewrite_bot_poke(event, &self.bot_id);
+        let event = crate::onebot::private::rewrite_owner_private(event, &self.owner_qq_id);
 
         // Membership notices are the second discovery channel: a group the
         // bot was just added to may not produce a message for a long time,
@@ -464,7 +468,26 @@ impl Intake {
                         now,
                     )
                     .await;
-                self.spawn_group_info_fetch(group_id.clone());
+                if crate::onebot::private::private_user_id(&group_id).is_some() {
+                    // The owner chose to talk here: nothing to discover or approve.
+                    let _ = self
+                        .store
+                        .set_group_flags(
+                            &self.bot_id,
+                            &group_id,
+                            Some(true),
+                            Some(false),
+                            None,
+                            now,
+                        )
+                        .await;
+                    let _ = self
+                        .store
+                        .set_group_info(&self.bot_id, &group_id, Some("主人私聊"), Some(2), now)
+                        .await;
+                } else {
+                    self.spawn_group_info_fetch(group_id.clone());
+                }
             }
             Ok(false) => {}
             Err(_) => return IntakeOutcome::Skipped(SkipReason::MissingField.as_str()),
@@ -1139,6 +1162,22 @@ impl Intake {
             };
             let (ready, ceiling) = if strict_mode {
                 self.strict_release(&entries, first_at, last_activity, now)
+            } else if crate::onebot::private::private_user_id(&group.group_id).is_some() {
+                // One speaker and no room to read: a short fixed window is all the
+                // pacing this needs, and it saves the cadence model's round trip.
+                let trigger = should_flush(
+                    &entries,
+                    first_at,
+                    last_activity,
+                    now,
+                    PRIVATE_QUIET_SECONDS,
+                    self.limits.max_age_seconds,
+                    self.limits.batch,
+                );
+                (
+                    trigger.is_flush(),
+                    matches!(trigger, FlushTrigger::Full | FlushTrigger::MaxAge),
+                )
             } else {
                 match gate {
                     // Without a gate there is nothing to pace on, so the fixed windows still

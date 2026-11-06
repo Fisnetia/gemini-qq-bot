@@ -137,6 +137,7 @@ impl LiteSessions {
             home: self.cfg.agy_home.clone(),
             workspace: self.cfg.project_dir(group_id),
             model: self.cfg.agy_model.clone(),
+            effort: crate::agent::agy::AGY_EFFORT.to_string(),
             conversation_id,
             deliver_timeout_s: DELIVER_TIMEOUT_S,
             memory_scope: Some(format!("{}:{}", self.cfg.bot_id, group_id)),

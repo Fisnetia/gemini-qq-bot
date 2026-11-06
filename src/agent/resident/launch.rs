@@ -13,7 +13,7 @@ pub fn build_interactive_argv(config: &ResidentConfig) -> Vec<String> {
         "--model".to_string(),
         config.model.clone(),
         "--effort".to_string(),
-        AGY_EFFORT.to_string(),
+        config.effort.clone(),
     ];
     if let Some(id) = &config.conversation_id {
         argv.push("--conversation".to_string());

@@ -24,13 +24,69 @@ pub fn routes() -> Router<Arc<AdminState>> {
         .route("/settings/aux", axum::routing::put(put_aux))
         .route("/settings/aux/test", axum::routing::post(test_aux))
         .route("/settings/runtime", axum::routing::put(put_runtime))
+        .route("/settings/engine", axum::routing::put(put_engine))
+        .route("/settings/engine/models", axum::routing::get(get_models))
 }
 
 async fn get_settings(State(state): State<Arc<AdminState>>) -> ApiResult {
     ok_json(json!({
         "aux": state.settings.aux_view(),
         "runtime": state.settings.switch_view(),
+        "engine": state.settings.engine_view(),
     }))
+}
+
+/// The efforts `agy --effort` accepts.
+const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EngineUpdate {
+    model: Option<String>,
+    effort: Option<String>,
+}
+
+async fn get_models(State(state): State<Arc<AdminState>>) -> ApiResult {
+    ok_json(json!({ "models": state.settings.list_models().await }))
+}
+
+async fn put_engine(State(state): State<Arc<AdminState>>, Json(body): Json<Value>) -> ApiResult {
+    let update: EngineUpdate =
+        serde_json::from_value(body).map_err(|_| ApiError::bad_request("invalid_body"))?;
+    if update.model.is_none() && update.effort.is_none() {
+        return Err(ApiError::bad_request("empty_update"));
+    }
+    let model = update.model.map(|v| v.trim().to_string());
+    if let Some(model) = &model {
+        let valid = !model.is_empty()
+            && model.len() <= 100
+            && model
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'));
+        if !valid {
+            return Err(ApiError::bad_request("invalid_model"));
+        }
+    }
+    if let Some(effort) = &update.effort
+        && !EFFORTS.contains(&effort.as_str())
+    {
+        return Err(ApiError::bad_request("invalid_effort"));
+    }
+    let view = state
+        .settings
+        .update_engine(model, update.effort)
+        .map_err(|_| ApiError::internal())?;
+    let _ = state
+        .store
+        .audit(
+            ActorKind::Panel.as_str(),
+            "settings.engine.update",
+            None,
+            None,
+            crate::now_unix(),
+        )
+        .await;
+    ok_json(json!({ "engine": view }))
 }
 
 #[derive(Debug, Deserialize)]

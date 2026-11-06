@@ -107,6 +107,12 @@ fn shared_routes() -> Router<Arc<AdminState>> {
             get(get_persona).put(put_persona).delete(delete_persona),
         )
         .route(
+            "/persona/private",
+            get(get_private_persona)
+                .put(put_private_persona)
+                .delete(delete_private_persona),
+        )
+        .route(
             "/groups/{group_id}/memory/compaction",
             get(compaction_status).post(start_compaction),
         )
@@ -290,8 +296,8 @@ struct PersonaUpdate {
     persona: String,
 }
 
-/// Operator persona edit. Bounded and CQ-free so it cannot become a payload channel.
-async fn put_persona(State(state): State<Arc<AdminState>>, Json(body): Json<Value>) -> ApiResult {
+/// Bounded and CQ-free so an operator card cannot become a payload channel.
+fn parse_persona(body: Value) -> Result<String, ApiError> {
     let update: PersonaUpdate =
         serde_json::from_value(body).map_err(|_| ApiError::bad_request("invalid_body"))?;
     let text = update.persona.trim();
@@ -316,10 +322,16 @@ async fn put_persona(State(state): State<Arc<AdminState>>, Json(body): Json<Valu
             return Err(ApiError::bad_request("persona_too_long"));
         }
     }
+    Ok(text.to_string())
+}
+
+/// Operator persona edit.
+async fn put_persona(State(state): State<Arc<AdminState>>, Json(body): Json<Value>) -> ApiResult {
+    let text = parse_persona(body)?;
     let now = crate::now_unix();
     state
         .store
-        .put_persona(text, now)
+        .put_persona(&text, now)
         .await
         .map_err(|_| ApiError::internal())?;
     let _ = state
@@ -341,6 +353,63 @@ async fn delete_persona(State(state): State<Arc<AdminState>>) -> ApiResult {
         .audit(
             ActorKind::Panel.as_str(),
             "persona.reset",
+            None,
+            None,
+            crate::now_unix(),
+        )
+        .await;
+    ok_json(json!({ "ok": true }))
+}
+
+/// The private-chat card. An empty card means private chat uses the group card.
+async fn get_private_persona(State(state): State<Arc<AdminState>>) -> ApiResult {
+    let persona = state
+        .store
+        .get_private_persona()
+        .await
+        .map_err(|_| ApiError::internal())?;
+    ok_json(json!({
+        "is_default": persona.is_none(),
+        "persona": persona.unwrap_or_default(),
+        "max_chars": 4_000,
+    }))
+}
+
+async fn put_private_persona(
+    State(state): State<Arc<AdminState>>,
+    Json(body): Json<Value>,
+) -> ApiResult {
+    let text = parse_persona(body)?;
+    let now = crate::now_unix();
+    state
+        .store
+        .put_private_persona(&text, now)
+        .await
+        .map_err(|_| ApiError::internal())?;
+    let _ = state
+        .store
+        .audit(
+            ActorKind::Panel.as_str(),
+            "persona.private.update",
+            None,
+            None,
+            now,
+        )
+        .await;
+    ok_json(json!({ "ok": true }))
+}
+
+async fn delete_private_persona(State(state): State<Arc<AdminState>>) -> ApiResult {
+    state
+        .store
+        .delete_private_persona()
+        .await
+        .map_err(|_| ApiError::internal())?;
+    let _ = state
+        .store
+        .audit(
+            ActorKind::Panel.as_str(),
+            "persona.private.reset",
             None,
             None,
             crate::now_unix(),

@@ -24,6 +24,10 @@ const payloads: Record<string, unknown> = {
       api_key_set: false,
     },
     runtime: { session_rotation_enabled: true, quota_degradation_enabled: true },
+    engine: { model: "gemini-3.8-flash", effort: "low" },
+  },
+  "/api/v1/settings/engine/models": {
+    models: [{ id: "gemini-3.8-flash-high", label: "Gemini 3.8 Flash (High)" }],
   },
   "/api/v1/status": {
     bot_id: "2000000001",
@@ -85,6 +89,7 @@ const payloads: Record<string, unknown> = {
     ],
   },
   "/api/v1/persona": persona,
+  "/api/v1/persona/private": { persona: "", is_default: true, max_chars: 4000 },
   "/api/v1/stickers": { stickers: [], total: 0, library_size: 0 },
 };
 
@@ -109,6 +114,11 @@ function installFetch() {
         puts.push({ url, body });
         persona.persona = String(body.persona);
         return respond({ persona: persona.persona, is_default: false, max_chars: 4000 });
+      }
+      if (method === "PUT" && url === "/api/v1/persona/private") {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        puts.push({ url, body });
+        return respond({ ok: true });
       }
       if (method === "GET" && url in payloads) {
         return respond(payloads[url]);
@@ -161,16 +171,28 @@ describe("console shell", () => {
 
     // Persona editor: shows the stored card, saving PUTs the edit.
     fireEvent.click(screen.getByRole("tab", { name: "人设卡" }));
-    const area = await screen.findByLabelText("人设卡内容");
+    const area = await screen.findByLabelText("群聊人设内容");
     expect((area as HTMLTextAreaElement).value).toContain("冒烟测试用人设卡");
     fireEvent.change(area, { target: { value: "# Role: Smoke\n\n改过的人设卡。" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存人设卡" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存群聊人设" }));
     await waitFor(() => expect(puts).toHaveLength(1));
     expect(puts[0].body.persona).toBe("# Role: Smoke\n\n改过的人设卡。");
     expect(await screen.findByText(/已保存。各群在下一轮对话时换上新人设卡/)).toBeTruthy();
 
+    // Private card: starts empty and saves to its own endpoint.
+    const privateArea = await screen.findByLabelText("私聊人设内容");
+    expect((privateArea as HTMLTextAreaElement).value).toBe("");
+    fireEvent.change(privateArea, { target: { value: "私聊人设" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存私聊人设" }));
+    await waitFor(() => expect(puts).toHaveLength(2));
+    expect(puts[1].url).toBe("/api/v1/persona/private");
+    expect(puts[1].body.persona).toBe("私聊人设");
+
     // Settings: agy mode is explained, gateway starts disabled.
     fireEvent.click(screen.getByRole("tab", { name: "设置" }));
     expect(await screen.findByText(/自动落到/)).toBeTruthy();
+    const modelSelect = screen.getByRole("combobox", { name: "主模型" }) as HTMLSelectElement;
+    expect(modelSelect.value).toBe("gemini-3.8-flash");
+    expect(await screen.findByText(/gemini-3\.8-flash-high/)).toBeTruthy();
   });
 });

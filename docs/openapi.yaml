@@ -122,6 +122,58 @@ paths:
       summary: Drop the stored card and fall back to the compiled default
       responses:
         "200": { description: Default restored }
+  /api/v1/persona/private:
+    get:
+      summary: Owner private-chat card; empty means private chat uses the group card
+      responses:
+        "200":
+          description: Persona payload
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  persona: { type: string }
+                  is_default: { type: boolean }
+                  max_chars: { type: integer }
+    put:
+      summary: Store the private-chat card (next private turn picks it up)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [persona]
+              properties:
+                persona: { type: string, maxLength: 4000 }
+      responses:
+        "200": { description: Stored }
+        "400": { description: empty_persona / persona_too_long / forbidden_markup }
+    delete:
+      summary: Drop the private card so private chat uses the group card again
+      responses:
+        "200": { description: Cleared }
+  /api/v1/settings/engine:
+    put:
+      summary: Set the model and effort for main sessions (applies at next session start)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                model: { type: string, maxLength: 100 }
+                effort: { type: string, enum: [low, medium, high, xhigh, max] }
+      responses:
+        "200": { description: Stored }
+        "400": { description: empty_update / invalid_model / invalid_effort }
+  /api/v1/settings/engine/models:
+    get:
+      summary: Models available to the Agy account; empty when listing fails
+      responses:
+        "200": { description: Model list }
   /api/v1/groups/{group_id}/memory/compaction:
     get:
       summary: Compaction status for the group

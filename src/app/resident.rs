@@ -72,6 +72,8 @@ pub struct ResidentManager {
     bin: PathBuf,
     home: PathBuf,
     model: String,
+    /// Console-selected model and effort; `None` keeps the startup defaults.
+    engine: Option<crate::app::runtime_settings::SharedEngine>,
     reader: Arc<dyn StepReader>,
     sessions: tokio::sync::Mutex<HashMap<String, Arc<ResidentSession>>>,
     /// Spawns that have not finished onboarding. `sessions` stays empty until
@@ -202,6 +204,7 @@ impl ResidentManager {
             bin,
             home,
             model,
+            engine: None,
             reader: Arc::new(DbStepReader),
             sessions: tokio::sync::Mutex::new(HashMap::new()),
             inflight: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -226,6 +229,25 @@ impl ResidentManager {
 
     /// Overwrite the respawn-cooldown switch (config
     /// `respawn_backoff_enabled`).
+    pub fn with_engine(mut self, engine: crate::app::runtime_settings::SharedEngine) -> Self {
+        self.engine = Some(engine);
+        self
+    }
+
+    /// The model and effort for a session starting now.
+    fn engine_choice(&self) -> (String, String) {
+        match &self.engine {
+            Some(engine) => {
+                let engine = engine.read().unwrap_or_else(|e| e.into_inner());
+                (engine.model.clone(), engine.effort.clone())
+            }
+            None => (
+                self.model.clone(),
+                crate::agent::agy::AGY_EFFORT.to_string(),
+            ),
+        }
+    }
+
     pub fn with_respawn_backoff_enabled(mut self, enabled: bool) -> Self {
         self.respawn_backoff_enabled = enabled;
         self
@@ -516,11 +538,13 @@ impl ResidentManager {
             }
         }
 
+        let (model, effort) = self.engine_choice();
         let config = ResidentConfig {
             bin: self.bin.clone(),
             home: self.home.clone(),
             workspace: workspace.to_path_buf(),
-            model: self.model.clone(),
+            model,
+            effort,
             conversation_id,
             deliver_timeout_s: self.deliver_timeout_s,
             memory_scope: Some(format!("{}:{}", self.bot_id, real_group_id(group_id))),

@@ -406,6 +406,88 @@ async fn settings_round_trip_updates_aux_and_switches() {
 }
 
 #[tokio::test]
+async fn api_v1_private_persona_is_stored_apart_from_the_group_card() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let pool = crate::store::migrations::open_and_migrate(&dir.path().join("bot.sqlite3"))
+        .await
+        .expect("迁移");
+    let store = Arc::new(SqliteStore::new(pool));
+    let state = state_for(&dir, store);
+
+    let body = get_json(Arc::clone(&state), "/api/v1/persona/private").await;
+    assert_eq!(body["persona"], json!(""));
+    assert_eq!(body["is_default"], json!(true));
+
+    let (status, _) = put_json(
+        Arc::clone(&state),
+        "/api/v1/persona/private",
+        json!({"persona": "私聊人设"}),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let private = get_json(Arc::clone(&state), "/api/v1/persona/private").await;
+    assert_eq!(private["persona"], json!("私聊人设"));
+    assert_eq!(private["is_default"], json!(false));
+    let group = get_json(Arc::clone(&state), "/api/v1/persona").await;
+    assert_eq!(group["is_default"], json!(true));
+
+    use tower::ServiceExt;
+    let response = router(state.clone())
+        .oneshot(
+            axum::http::Request::builder()
+                .method("DELETE")
+                .uri("/api/v1/persona/private")
+                .body(axum::body::Body::empty())
+                .expect("请求"),
+        )
+        .await
+        .expect("响应");
+    assert_eq!(response.status(), 200);
+    let body = get_json(state, "/api/v1/persona/private").await;
+    assert_eq!(body["is_default"], json!(true));
+}
+
+#[tokio::test]
+async fn api_v1_engine_settings_validate_and_apply() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let pool = crate::store::migrations::open_and_migrate(&dir.path().join("bot.sqlite3"))
+        .await
+        .expect("迁移");
+    let store = Arc::new(SqliteStore::new(pool));
+    let state = state_for(&dir, store);
+
+    let (status, _) = put_json(
+        Arc::clone(&state),
+        "/api/v1/settings/engine",
+        json!({"effort": "extreme"}),
+    )
+    .await;
+    assert_eq!(status, 400);
+    let (status, _) = put_json(
+        Arc::clone(&state),
+        "/api/v1/settings/engine",
+        json!({"model": "bad model"}),
+    )
+    .await;
+    assert_eq!(status, 400);
+
+    let (status, _) = put_json(
+        Arc::clone(&state),
+        "/api/v1/settings/engine",
+        json!({"model": "gemini-3.8-flash-high", "effort": "medium"}),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let body = get_json(Arc::clone(&state), "/api/v1/settings").await;
+    assert_eq!(body["engine"]["model"], json!("gemini-3.8-flash-high"));
+    assert_eq!(body["engine"]["effort"], json!("medium"));
+
+    // A missing agy binary is an empty list, not an error page.
+    let body = get_json(state, "/api/v1/settings/engine/models").await;
+    assert_eq!(body["models"], json!([]));
+}
+
+#[tokio::test]
 async fn api_v1_persona_edit_round_trips() {
     let dir = tempfile::tempdir().expect("tmp");
     let pool = crate::store::migrations::open_and_migrate(&dir.path().join("bot.sqlite3"))

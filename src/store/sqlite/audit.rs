@@ -82,4 +82,32 @@ impl SqliteStore {
         .await?;
         Ok(())
     }
+
+    /// The owner's private-chat card. `None` means private chat uses the group card.
+    pub async fn get_private_persona(&self) -> BotResult<Option<String>> {
+        let text: Option<String> =
+            sqlx::query_scalar("SELECT text FROM persona_config WHERE id = 'private'")
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(text)
+    }
+
+    pub async fn delete_private_persona(&self) -> BotResult<()> {
+        sqlx::query("DELETE FROM persona_config WHERE id = 'private'")
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn put_private_persona(&self, text: &str, now: i64) -> BotResult<()> {
+        sqlx::query(
+            "INSERT INTO persona_config (id, text, updated_at) VALUES ('private', ?, ?)
+             ON CONFLICT (id) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at",
+        )
+        .bind(text)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
 }
