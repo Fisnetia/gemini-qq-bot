@@ -1,0 +1,44 @@
+/target
+# Cargo build artifacts
+**/target/
+
+# Runtime state: never commit a live database, WAL files, or attachments.
+/data/
+runtime/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+
+# The Agy binary is injected for a self-built image, never committed.
+vendor/agy
+vendor/*.bin
+
+# Real configuration and secrets. Only `config.example.toml` is tracked; it carries
+# placeholders and must never be edited in place with real values.
+config.toml
+*.local.toml
+.env
+.env.*
+secrets/
+*.token
+*.key
+*.pem
+
+# Agy home: OAuth state and the operator's settings.json live here at runtime.
+agy-home/
+settings.json
+
+# Downloaded or generated images.
+*.tmp
+*.part
+mihomo.yaml
+!deploy/mihomo.example.yaml
+
+# Local backups before edits (kept on disk for manual rollback, never committed).
+*.bak-*
+__pycache__/
+
+# Web console build products (source lives in web/, dist is built).
+web/node_modules/
+web/dist/

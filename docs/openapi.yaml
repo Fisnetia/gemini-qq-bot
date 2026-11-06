@@ -1,0 +1,302 @@
+openapi: 3.1.0
+info:
+  title: gemini-qq-bot admin API
+  version: "1.0"
+  description: >
+    Operator API for the bot. The canonical prefix is `/api/v1`; every
+    non-settings endpoint is also mounted under the legacy `/internal/v1`
+    prefix for the existing gateway/panel. All endpoints require the
+    admin bearer <redacted> The settings endpoints exist only under
+    `/api/v1`.
+servers:
+  - url: /
+security:
+  - bearerAuth: []
+paths:
+  /api/v1/status:
+    get:
+      summary: Health snapshot, pacing tier and live caps
+      responses:
+        "200": { description: Status payload }
+  /api/v1/quota:
+    get:
+      summary: Agy account quota buckets (weekly / five-hour) with reset times
+      responses:
+        "200": { description: Quota snapshot }
+  /api/v1/groups:
+    get:
+      summary: List groups (enabled flag, ambient pace, session id, turn cap)
+      responses:
+        "200": { description: Group list }
+  /api/v1/groups/{group_id}:
+    patch:
+      summary: Update a group (enabled / paused / ambient_pace)
+      parameters:
+        - $ref: "#/components/parameters/groupId"
+      responses:
+        "200": { description: Updated group }
+        "400": { description: Unknown field value }
+  /api/v1/groups/{group_id}/state:
+    get:
+      summary: Read the group's mood/topic state
+      parameters:
+        - $ref: "#/components/parameters/groupId"
+      responses:
+        "200": { description: State payload }
+    put:
+      summary: Replace the group's mood/topic state
+      parameters:
+        - $ref: "#/components/parameters/groupId"
+      responses:
+        "200": { description: Stored }
+        "400": { description: Invalid state payload }
+  /api/v1/groups/{group_id}/memories:
+    get:
+      summary: List the group's memories
+      parameters:
+        - $ref: "#/components/parameters/groupId"
+      responses:
+        "200": { description: Memory list }
+    post:
+      summary: Create a memory (content + kind required)
+      parameters:
+        - $ref: "#/components/parameters/groupId"
+      responses:
+        "200": { description: Created memory }
+        "400": { description: Missing content or kind }
+  /api/v1/groups/{group_id}/memories/{memory_ref}:
+    patch:
+      summary: Update a memory
+      parameters:
+        - $ref: "#/components/parameters/groupId"
+        - name: memory_ref
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Updated memory }
+    delete:
+      summary: Delete a memory
+      parameters:
+        - $ref: "#/components/parameters/groupId"
+        - name: memory_ref
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: Deleted }
+  /api/v1/persona:
+    get:
+      summary: Current character card (stored override or compiled default)
+      responses:
+        "200":
+          description: Persona payload
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  persona: { type: string }
+                  is_default: { type: boolean }
+                  max_chars: { type: integer }
+    put:
+      summary: Replace the character card (effective from each group's next turn)
+      description: >
+        The stored card replaces the compiled-in default in the project
+        AGENTS.md the agent reads; the output contract stays compiled-in.
+        The edit is rejected when the rendered file would exceed the
+        agent's instruction-file size limit.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [persona]
+              properties:
+                persona: { type: string, maxLength: 4000 }
+      responses:
+        "200": { description: Stored }
+        "400": { description: empty_persona / persona_too_long / forbidden_markup }
+    delete:
+      summary: Drop the stored card and fall back to the compiled default
+      responses:
+        "200": { description: Default restored }
+  /api/v1/groups/{group_id}/memory/compaction:
+    get:
+      summary: Compaction status for the group
+      parameters:
+        - $ref: "#/components/parameters/groupId"
+      responses:
+        "200": { description: Compaction status }
+    post:
+      summary: Start compaction (accepts no model, prompt or content)
+      parameters:
+        - $ref: "#/components/parameters/groupId"
+      responses:
+        "200": { description: Started or decision reported }
+  /api/v1/groups/{group_id}/session/reset:
+    post:
+      summary: Drop the group's agent session (next turn starts fresh)
+      parameters:
+        - $ref: "#/components/parameters/groupId"
+      responses:
+        "200": { description: Session dropped }
+  /api/v1/stickers:
+    get:
+      summary: List collected stickers
+      responses:
+        "200": { description: Sticker list }
+  /api/v1/stickers/{hash}:
+    patch:
+      summary: Update a sticker (keep / ignore / description)
+      parameters:
+        - name: hash
+          in: path
+          required: true
+          schema: { type: string, pattern: "^[0-9a-f]{64}$" }
+      responses:
+        "200": { description: Updated sticker }
+    delete:
+      summary: Delete a sticker
+      parameters:
+        - name: hash
+          in: path
+          required: true
+          schema: { type: string, pattern: "^[0-9a-f]{64}$" }
+      responses:
+        "200": { description: Deleted }
+  /api/v1/stickers/{hash}/image:
+    get:
+      summary: The sticker's image bytes
+      parameters:
+        - name: hash
+          in: path
+          required: true
+          schema: { type: string, pattern: "^[0-9a-f]{64}$" }
+      responses:
+        "200": { description: Image }
+  /api/v1/outbox/{id}/retry:
+    post:
+      summary: Requeue a failed outbox row
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200": { description: Requeued }
+  /api/v1/pending:
+    get:
+      summary: Unclaimed pending events overview
+      responses:
+        "200": { description: Pending overview }
+  /api/v1/audit:
+    get:
+      summary: Operator audit log (paged, newest first)
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0 }
+      responses:
+        "200": { description: Audit page }
+  /api/v1/settings:
+    get:
+      summary: Effective runtime settings (aux layer + runtime switches)
+      responses:
+        "200":
+          description: Settings view
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  aux:
+                    $ref: "#/components/schemas/AuxSettings"
+                  runtime:
+                    $ref: "#/components/schemas/RuntimeSwitches"
+  /api/v1/settings/aux:
+    put:
+      summary: Update the aux gateway configuration (applies live)
+      description: >
+        Partial update; omitted fields keep their values. Persisted as an
+        overlay next to the database and re-applied at startup. Setting
+        `enabled: false` (or an unconfigured gateway) puts the aux layer
+        in agy mode — one dedicated agent session takes over every aux
+        job. `api_key` is write-only (empty string clears the overlay
+        key); it is never returned.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuxUpdate"
+      responses:
+        "200": { description: Effective aux view }
+        "400": { description: invalid_base_url / invalid_model / invalid_session_header / invalid_api_key }
+  /api/v1/settings/aux/test:
+    post:
+      summary: Probe a candidate gateway configuration without applying it
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuxUpdate"
+      responses:
+        "200": { description: "{ ok, status } probe result" }
+  /api/v1/settings/runtime:
+    put:
+      summary: Flip the runtime switches (applies live)
+      description: >
+        `session_rotation_enabled: false` keeps group sessions until they
+        fault (long sessions can drift). `quota_degradation_enabled:
+        false` makes quota display-only — tiers are still computed and
+        reported as raw_tier but stop shaping behaviour. At least one
+        field is required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RuntimeSwitches"
+      responses:
+        "200": { description: Effective switches }
+        "400": { description: empty_update }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    groupId:
+      name: group_id
+      in: path
+      required: true
+      schema: { type: string, pattern: "^[0-9]+$" }
+  schemas:
+    AuxSettings:
+      type: object
+      properties:
+        mode: { type: string, enum: [gateway, agy] }
+        enabled: { type: boolean }
+        base_url: { type: string }
+        model: { type: string }
+        session_header: { type: string }
+        api_key_set: { type: boolean }
+    AuxUpdate:
+      type: object
+      properties:
+        enabled: { type: boolean }
+        base_url: { type: string, format: uri }
+        model: { type: string, maxLength: 100 }
+        session_header: { type: string }
+        api_key: { type: string, maxLength: 512, writeOnly: true }
+    RuntimeSwitches:
+      type: object
+      properties:
+        session_rotation_enabled: { type: boolean }
+        quota_degradation_enabled: { type: boolean }

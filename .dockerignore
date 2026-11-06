@@ -1,0 +1,11 @@
+# Keep the build context small and make sure no runtime secret can ever be copied in.
+target/
+vendor/agy
+runtime/
+data/
+*.sqlite3*
+deploy/
+.git/
+**/.DS_Store
+*.md
+!Cargo.lock

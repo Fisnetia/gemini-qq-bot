@@ -1,0 +1,92 @@
+# gemini-qq-bot 配置示例。复制为 config.toml 后按需修改；真实配置切勿入库。
+#
+# 必填环境变量（不在本文件内）：
+#   ONEBOT_BOT_ID        机器人 QQ 号（纯数字）
+#   ONEBOT_WS_URL        OneBot 实现的 forward WebSocket 地址，如 ws://127.0.0.1:3001
+#   OWNER_QQ_ID          主人 QQ 号（纯数字）
+#   ADMIN_TOKEN          管理 API 的 token（至少 32 字符），或用 ADMIN_TOKEN_FILE 指向文件
+# 可选环境变量：
+#   ONEBOT_ACCESS_TOKEN  OneBot 实现要求 token 时填
+#   ADMIN_BIND           管理 API 监听地址，默认 127.0.0.1:18081
+#   WEB_DIST             Web 管理台构建产物目录（设置后管理监听在 /console/ 托管，见 web/README.md）
+#   EVENT_WEBHOOK_URL    事件 webhook 地址（不设 = 关闭；事件与格式见 docs/EXTENDING.md）
+#   EVENT_WEBHOOK_SECRET 事件 webhook 的 HMAC 签名密钥（可选）
+#   GEMINI_DB_PATH       数据库路径，默认 /data/bot.sqlite3
+#   AUX_ENABLED          填 1/true 启用 aux 网关模式；不启用则自动落 agy 模式
+#   AUX_BASE_URL         aux 网关地址（OpenAI 兼容），默认 http://host.docker.internal:18088
+#   AUX_API_KEY_FILE     aux 网关密钥文件路径，默认 /run/secrets/aux_api_key
+#   AUX_MODEL            aux 网关模型名，默认 hy3
+#   AUX_SESSION_HEADER   aux 网关的粘性会话头名，默认 X-Aux-Session（网关用旧头名时在此改回）
+#   SNOWLUMA_MEDIA_ORIGINS  允许下载图片的来源 origin 白名单，逗号分隔
+#   AGY_BIN              agy 可执行文件路径（默认在 PATH 里找 agy）
+#   AGY_HOME             agy 的 HOME 目录（OAuth 登录态所在处）
+#   AGY_MODEL            agy 会话使用的模型（默认 agy 自身默认）
+#   AGY_PROJECTS_DIR     每群 agy 项目目录的根
+#   STICKER_DIR          表情库文件目录（空 = 禁用表情库）
+#   MIHOMO_ENABLED       是否由 bot 托管 mihomo 代理（出口选择用），及
+#   MIHOMO_BIN / MIHOMO_CONFIG_PATH  其二进制与配置路径
+# 本文件路径由 GEMINI_BOT_CONFIG 环境变量指定。
+
+bot_id = ""
+
+# 攒批窗口：静默多少秒算一批、单批最长等待、最多条数/字数/图片数。
+quiet_window_seconds = 8
+max_batch_age_seconds = 45
+max_batch_messages = 30
+max_batch_chars = 6000
+max_batch_images = 6
+
+# 回复引擎：并发轮次与单轮超时（秒）。
+agent_concurrency = 4
+agent_timeout_seconds = 300
+
+# 代理（可选，默认端口按本地 mihomo 约定；不用代理可忽略）。
+mihomo_api_port = 9090
+mihomo_proxy_port = 7890
+
+# 记忆：注入上下文的字符预算、每日压缩次数上限。
+memory_context_budget = 4000
+compaction_daily_limit = 24
+
+# 每小时调用保险丝（全群合计上限）。
+hourly_call_budget = 60
+
+# 泄洪（一轮内消息洪峰的摘要合并）开关。
+flood_enabled = true
+
+# 会话轮换：主会话自动轮换的轮次上限（与下面的开关配合；见 docs）。
+conversation_turn_limit = 35
+
+# 主会话自动轮换开关（默认开）。关掉后会话用到故障为止，
+# 代价是长会话的上下文漂移——设置页里也会再提醒一次。
+session_rotation_enabled = true
+
+# 额度降级开关（默认开）。开时 pacing 档位会真实收紧认领与上限；
+# 关掉后额度只显示不干预（档位照常计算并以 raw_tier 上报）。
+# 额度真正耗尽不归这个开关管。
+quota_degradation_enabled = true
+
+# 常驻会话重生退避开关（默认开）。关掉后会话退役后立即重生，代价是
+# 确定性失败（如内容过滤反复触发）时会热重生，靠陈旧护栏收敛。
+respawn_backoff_enabled = true
+
+# 回复时是否带引用。
+reply_quote_enabled = true
+
+# resident 常驻会话参数。
+resident_quiet_s = 5.0
+resident_soft_cap_s = 600
+resident_hard_cap_s = 1200
+resident_max_inserts = 3
+resident_poll_ms = 250
+resident_deliver_timeout_s = 30
+resident_insert_esc = false
+
+# 命中后以独占重试处理「整轮无提交」的群（空 = 关闭该机制）。
+no_submission_retry_groups = []
+
+# 流量大户群：额度预测里权重翻倍（空 = 各群同权）。
+heavy_group_ids = []
+
+# 喊这些名字算在喊机器人（除 @ 外的触发名）。
+bot_call_names = ["Gemini"]
