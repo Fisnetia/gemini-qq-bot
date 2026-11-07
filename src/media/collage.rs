@@ -69,17 +69,64 @@ pub const VISION_MAX_BASE64_BYTES: usize = 1_400_000;
 /// never worth that.
 pub const STICKER_MAX_BASE64_BYTES: usize = 1_048_576;
 
-/// Re-encode a sticker as JPEG small enough that its base64 fits the frame budget.
+/// Largest base64 payload an animated sticker may take when sent untouched.
 ///
-/// The library file itself may be close to a mebibyte, and base64 adds a third, so the
-/// bytes cannot be sent verbatim. Returns `None` when the input is not an image or no
+/// An animation cannot be shrunk without losing its frames, so it gets a larger
+/// budget than a still. SnowLuma's WebSocket server accepts frames up to 10 MiB,
+/// and a 2.6 MB payload was sent through it and accepted (2026-11-07); 8 MiB
+/// leaves room for the rest of the frame.
+pub const STICKER_ANIMATED_MAX_BASE64_BYTES: usize = 8 * 1_048_576;
+
+/// Re-encode a sticker small enough that its base64 fits the still budget.
+///
+/// A picture with transparent pixels is kept as PNG, because JPEG has no alpha
+/// and turned every transparent background solid (2026-11-07). Anything opaque
+/// is JPEG as before. Returns `None` when the input is not an image or no
 /// encoding fits.
 pub fn fit_for_sticker(bytes: &[u8]) -> Option<Vec<u8>> {
-    let jpeg = fit_for_agy_within(bytes, STICKER_MAX_BASE64_BYTES / 4 * 3)?;
-    if base64_encode(&jpeg).len() > STICKER_MAX_BASE64_BYTES {
+    let ceiling = STICKER_MAX_BASE64_BYTES / 4 * 3;
+    let encoded = match image::load_from_memory(bytes) {
+        Ok(image) if has_transparency(&image) => fit_png_within(image, ceiling)?,
+        Ok(_) => fit_for_agy_within(bytes, ceiling)?,
+        Err(_) => return None,
+    };
+    if base64_encode(&encoded).len() > STICKER_MAX_BASE64_BYTES {
         return None;
     }
-    Some(jpeg)
+    Some(encoded)
+}
+
+/// Whether any pixel is not fully opaque. A decoder may hand back RGBA for a
+/// picture that has no transparency at all (every GIF does), so the channel
+/// alone does not decide.
+fn has_transparency(image: &image::DynamicImage) -> bool {
+    image.color().has_alpha() && image.to_rgba8().pixels().any(|p| p.0[3] < 255)
+}
+
+/// PNG shrink loop: halve the picture until the encoding fits.
+fn fit_png_within(image: image::DynamicImage, ceiling: usize) -> Option<Vec<u8>> {
+    use image::ImageEncoder;
+
+    let mut image = image.to_rgba8();
+    for _ in 0..8 {
+        let mut buf = Vec::new();
+        let encoded = image::codecs::png::PngEncoder::new(&mut buf).write_image(
+            image.as_raw(),
+            image.width(),
+            image.height(),
+            image::ExtendedColorType::Rgba8,
+        );
+        if encoded.is_ok() && !buf.is_empty() && buf.len() <= ceiling {
+            return Some(buf);
+        }
+        let next_w = (image.width() / 2).max(1);
+        let next_h = (image.height() / 2).max(1);
+        if next_w == image.width() && next_h == image.height() {
+            break;
+        }
+        image = image::imageops::thumbnail(&image, next_w, next_h);
+    }
+    None
 }
 
 /// Re-encode as JPEG, shrinking until the bytes fit in one mebibyte.

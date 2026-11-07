@@ -9,7 +9,7 @@
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::media::collage::STICKER_MAX_BASE64_BYTES;
+use crate::media::collage::{STICKER_ANIMATED_MAX_BASE64_BYTES, STICKER_MAX_BASE64_BYTES};
 
 /// Parameters for `send_group_msg`.
 #[derive(Debug, Clone, Serialize)]
@@ -94,7 +94,7 @@ impl SendGroupMsg {
         // so the fix is to stop re-encoding them, not to re-encode them better.
         let (payload, kind) = if is_animated_image(bytes) {
             let encoded = crate::media::collage::base64_encode(bytes);
-            if encoded.len() <= STICKER_MAX_BASE64_BYTES {
+            if encoded.len() <= STICKER_ANIMATED_MAX_BASE64_BYTES {
                 (encoded, StickerPayload::Animated)
             } else {
                 // Too big to send untouched. Falling back to the still frame is
@@ -107,13 +107,25 @@ impl SendGroupMsg {
                 )
             }
         } else {
-            let jpeg = crate::media::collage::fit_for_sticker(bytes)?;
-            (
-                crate::media::collage::base64_encode(&jpeg),
-                StickerPayload::Static,
-            )
+            // A still that already fits goes out as the original file: re-encoding
+            // it only costs quality, and as JPEG it also cost the transparency.
+            let original = crate::media::collage::base64_encode(bytes);
+            if original.len() <= STICKER_MAX_BASE64_BYTES && image::guess_format(bytes).is_ok() {
+                (original, StickerPayload::Static)
+            } else {
+                let still = crate::media::collage::fit_for_sticker(bytes)?;
+                (
+                    crate::media::collage::base64_encode(&still),
+                    StickerPayload::Static,
+                )
+            }
         };
-        if payload.len() > STICKER_MAX_BASE64_BYTES {
+        let cap = if kind == StickerPayload::Animated {
+            STICKER_ANIMATED_MAX_BASE64_BYTES
+        } else {
+            STICKER_MAX_BASE64_BYTES
+        };
+        if payload.len() > cap {
             return None;
         }
         let url = format!("base64://{payload}");
@@ -436,11 +448,11 @@ mod tests {
     #[test]
     fn an_oversized_animation_falls_back_to_a_still_frame() {
         // Raw budget: base64 adds a third, so anything past 3/4 of the cap overflows.
-        let huge = padded_gif(STICKER_MAX_BASE64_BYTES / 4 * 3 + 4096);
+        let huge = padded_gif(STICKER_ANIMATED_MAX_BASE64_BYTES / 4 * 3 + 4096);
         let encoded_len = crate::media::collage::base64_encode(&huge).len();
         assert!(
-            encoded_len > STICKER_MAX_BASE64_BYTES,
-            "素材不够大：base64 {encoded_len} <= {STICKER_MAX_BASE64_BYTES}"
+            encoded_len > STICKER_ANIMATED_MAX_BASE64_BYTES,
+            "素材不够大：base64 {encoded_len} <= {STICKER_ANIMATED_MAX_BASE64_BYTES}"
         );
         let (msg, kind) =
             SendGroupMsg::sticker_tracked("100", &huge, None).expect("应当回落而不是失败");
@@ -450,6 +462,68 @@ mod tests {
         // The fallback re-encodes JPEG, so the frame starts with SOI, never GIF.
         let bytes = decode_base64(&payload);
         assert_eq!(&bytes[..2], &[0xFF, 0xD8], "回落帧应当是 JPEG");
+    }
+
+    /// A 2 MB GIF is an ordinary QQ sticker: it must keep its frames instead of
+    /// being cut to one under the still budget (2026-11-07).
+    #[test]
+    fn a_two_megabyte_animation_is_still_sent_whole() {
+        let big = padded_gif(2_000_000);
+        assert!(crate::media::collage::base64_encode(&big).len() > STICKER_MAX_BASE64_BYTES);
+        let (msg, kind) = SendGroupMsg::sticker_tracked("100", &big, None).expect("应当能发");
+        assert_eq!(kind, StickerPayload::Animated);
+        assert_eq!(decode_base64(&msg.sent_image_bytes().expect("图片段")), big);
+    }
+
+    /// A transparent PNG with alpha that varies across the picture.
+    fn transparent_png(w: u32, h: u32) -> Vec<u8> {
+        let img = image::RgbaImage::from_fn(w, h, |x, y| {
+            image::Rgba([
+                (x % 251) as u8,
+                (y % 241) as u8,
+                ((x * y) % 239) as u8,
+                ((x + y) % 256) as u8,
+            ])
+        });
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .expect("编码 PNG");
+        bytes
+    }
+
+    /// A still that fits goes out untouched, transparency and all.
+    #[test]
+    fn a_small_still_is_sent_as_the_original_file() {
+        let original = transparent_png(64, 64);
+        let (msg, kind) = SendGroupMsg::sticker_tracked("100", &original, None).expect("应当能发");
+        assert_eq!(kind, StickerPayload::Static);
+        assert_eq!(
+            decode_base64(&msg.sent_image_bytes().expect("图片段")),
+            original
+        );
+    }
+
+    /// A transparent still that has to shrink stays PNG, so its background stays
+    /// transparent instead of turning solid as JPEG.
+    #[test]
+    fn a_large_transparent_still_shrinks_as_png() {
+        let big = transparent_png(1400, 1400);
+        assert!(crate::media::collage::base64_encode(&big).len() > STICKER_MAX_BASE64_BYTES);
+        let (msg, kind) = SendGroupMsg::sticker_tracked("100", &big, None).expect("应当压到能发");
+        assert_eq!(kind, StickerPayload::Static);
+        let payload = msg.sent_image_bytes().expect("图片段");
+        assert!(payload.len() <= STICKER_MAX_BASE64_BYTES);
+        let bytes = decode_base64(&payload);
+        assert_eq!(&bytes[..4], b"\x89PNG", "透明图缩小后应当仍是 PNG");
+        let decoded = image::load_from_memory(&bytes).expect("能解码");
+        assert!(
+            decoded.to_rgba8().pixels().any(|p| p.0[3] < 255),
+            "透明度应当保留"
+        );
     }
 
     #[test]
