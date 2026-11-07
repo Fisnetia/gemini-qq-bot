@@ -344,6 +344,43 @@ fn submission_is_fresh(created_at: i64, insert_at: f64) -> bool {
     created_at as f64 >= insert_at.floor()
 }
 
+/// Rejections in a row before the model is interrupted and reminded once.
+/// A healthy turn fixes a bad submission on the first or second try.
+const REJECT_LOOP_NUDGE: usize = 3;
+/// Rejections in a row before the turn is given up and the session retired.
+const REJECT_LOOP_RETIRE: usize = 8;
+
+/// What to do about a run of rejected submissions in one turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RejectLoop {
+    Continue,
+    Nudge,
+    Retire,
+}
+
+fn reject_loop_action(streak: usize, already_nudged: bool) -> RejectLoop {
+    if streak >= REJECT_LOOP_RETIRE {
+        RejectLoop::Retire
+    } else if streak >= REJECT_LOOP_NUDGE && !already_nudged {
+        RejectLoop::Nudge
+    } else {
+        RejectLoop::Continue
+    }
+}
+
+/// The reminder for a model stuck in a broken `submit_reply` loop: stop, and
+/// make one well-formed call with the token spelled out.
+fn reject_loop_prompt(turn_token: &str) -> String {
+    format!(
+        "停一下：你连续多次调用 submit_reply 都被拒绝了，不要再重复同样的调用。\n\
+         请只调用一次 submit_reply，参数必须是：\n\
+         - turn_token：\"{turn_token}\"\n\
+         - should_reply：true 或 false\n\
+         - 要发言时，用 reply_text 写正文；不发言时不要带正文。\n\
+         其他字段可以省略。"
+    )
+}
+
 /// A no-submission death arms the one-shot replay only for an opted-in
 /// group, and never for a job that is itself the replay: a second death
 /// falls back to the plain release-and-merge behaviour (2026-10-29).

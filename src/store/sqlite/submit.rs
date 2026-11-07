@@ -112,6 +112,21 @@ impl SqliteStore {
             .collect())
     }
 
+    /// How many of a group's submissions since `since` were rejected in a row,
+    /// counting back from the newest. Rejections under any token count: a
+    /// model stuck in a broken call often stops sending the token at all.
+    pub async fn rejection_streak(&self, group_id: &str, since: i64) -> BotResult<usize> {
+        let verdicts: Vec<String> = sqlx::query_scalar(
+            "SELECT verdict FROM turn_submissions
+             WHERE group_id = ? AND created_at >= ? ORDER BY id DESC LIMIT 32",
+        )
+        .bind(group_id)
+        .bind(since)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(verdicts.iter().take_while(|v| *v == "rejected").count())
+    }
+
     /// Drop a group's arm once its turn is over. Token-checked, so a stale
     /// disarm can never kill a newer turn's arm.
     pub async fn disarm_turn(&self, group_id: &str, turn_token: &str) -> BotResult<()> {

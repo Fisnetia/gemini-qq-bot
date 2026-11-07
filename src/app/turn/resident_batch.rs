@@ -151,6 +151,9 @@ impl TurnExecutor {
         // MCP channel: when the last insertion landed. A submission older
         // than this is a pre-insertion draft and never commits.
         let mut last_insert_at: i64 = 0;
+        // MCP channel: whether this turn already got the stuck-submission
+        // reminder (see `reject_loop_action`).
+        let mut reject_loop_nudged = false;
         // The pending set the last held-insert audit was written for, so a
         // batch that stays held does not re-audit on every poll tick (ESC
         // mode judges on every tick, not just idle-screen ones).
@@ -230,6 +233,63 @@ impl TurnExecutor {
                                 &session,
                                 "interrupt_failed",
                                 result,
+                            )
+                            .await;
+                    }
+                }
+            }
+
+            // A model stuck resubmitting a broken call never lets the barrier
+            // settle, so the turn would hang until the hard cap (2026-11-07:
+            // about 40 rejected calls in two minutes, with the group queued
+            // behind it). Catch it from the submission log instead.
+            if self.output_channel.is_mcp() {
+                let streak = self
+                    .store
+                    .rejection_streak(&job.group_id, now)
+                    .await
+                    .unwrap_or(0);
+                match reject_loop_action(streak, reject_loop_nudged) {
+                    RejectLoop::Continue => {}
+                    RejectLoop::Nudge => {
+                        reject_loop_nudged = true;
+                        manager
+                            .audit(
+                                &job.group_id,
+                                &format!("resident.turn.reject_loop.nudge.g{}", job.group_id),
+                            )
+                            .await;
+                        let token = prepared.turn_token.as_deref().unwrap_or_default();
+                        let _ = session.interrupt().await;
+                        if session.deliver(&reject_loop_prompt(token)).await.is_err() {
+                            return self
+                                .retire_resident(
+                                    manager,
+                                    job,
+                                    &call_id,
+                                    "reject_loop",
+                                    ErrorClass::AgentFailed.as_str(),
+                                    &coverage,
+                                )
+                                .await;
+                        }
+                        continue;
+                    }
+                    RejectLoop::Retire => {
+                        manager
+                            .audit(
+                                &job.group_id,
+                                &format!("resident.turn.reject_loop.retire.g{}", job.group_id),
+                            )
+                            .await;
+                        return self
+                            .retire_resident(
+                                manager,
+                                job,
+                                &call_id,
+                                "reject_loop",
+                                ErrorClass::AgentFailed.as_str(),
+                                &coverage,
                             )
                             .await;
                     }

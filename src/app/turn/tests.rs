@@ -978,6 +978,17 @@ fn an_insert_lands_when_its_step_says_not_when_it_was_noticed() {
 }
 
 #[test]
+fn a_run_of_rejections_is_nudged_once_then_retired() {
+    assert_eq!(reject_loop_action(0, false), RejectLoop::Continue);
+    assert_eq!(reject_loop_action(2, false), RejectLoop::Continue);
+    assert_eq!(reject_loop_action(3, false), RejectLoop::Nudge);
+    assert_eq!(reject_loop_action(5, true), RejectLoop::Continue);
+    assert_eq!(reject_loop_action(8, true), RejectLoop::Retire);
+    assert_eq!(reject_loop_action(8, false), RejectLoop::Retire);
+    assert!(reject_loop_prompt("abc123").contains("\"abc123\""));
+}
+
+#[test]
 fn submission_nudge_due_on_the_first_miss_of_any_turn() {
     assert!(submission_nudge_due(false));
     assert!(!submission_nudge_due(true));

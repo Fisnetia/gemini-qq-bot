@@ -125,6 +125,28 @@ async fn submissions_come_back_in_call_order() {
 }
 
 #[tokio::test]
+async fn a_rejection_streak_counts_back_to_the_last_acceptance() {
+    let (_d, s) = store().await;
+    s.record_submission("g", "tok", "{}", "rejected", "r", 10)
+        .await
+        .expect("记录");
+    s.record_submission("g", "tok", "{}", "accepted", "", 11)
+        .await
+        .expect("记录");
+    for at in 12..15 {
+        s.record_submission("g", "", "{}", "rejected", "token", at)
+            .await
+            .expect("记录");
+    }
+    s.record_submission("other", "", "{}", "rejected", "token", 13)
+        .await
+        .expect("记录");
+    assert_eq!(s.rejection_streak("g", 0).await.expect("读"), 3);
+    assert_eq!(s.rejection_streak("g", 14).await.expect("读"), 1);
+    assert_eq!(s.rejection_streak("none", 0).await.expect("读"), 0);
+}
+
+#[tokio::test]
 async fn a_first_seen_group_is_disabled_but_defaults_to_inserts_on() {
     let (_d, s) = store().await;
     s.ensure_group("bot", "100", 1).await.expect("建组");
