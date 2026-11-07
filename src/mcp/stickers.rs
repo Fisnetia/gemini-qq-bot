@@ -142,6 +142,31 @@ pub fn top_matches(
     scored.into_iter().map(|(raw, _, row)| (raw, row)).collect()
 }
 
+/// How many stickers a fruitless search offers instead of nothing.
+pub const FALLBACK_PICKS: usize = 3;
+
+/// Stickers to offer when nothing cleared the threshold: ones this group has
+/// not just seen first, then the most recently seen in the library. A search
+/// that always came back empty left the model saying its library was empty
+/// when it held eleven stickers (2026-11-08); offering a few, clearly marked
+/// as not a match, lets it send one when it is asked to.
+pub fn fallback_picks(
+    mut rows: Vec<crate::store::StickerRecord>,
+    recent: &[String],
+    limit: usize,
+) -> Vec<crate::store::StickerRecord> {
+    rows.sort_by(|a, b| {
+        let a_recent = recent.iter().any(|h| h == &a.hash);
+        let b_recent = recent.iter().any(|h| h == &b.hash);
+        a_recent
+            .cmp(&b_recent)
+            .then_with(|| b.last_seen_at.cmp(&a.last_seen_at))
+            .then_with(|| a.hash.cmp(&b.hash))
+    });
+    rows.truncate(limit);
+    rows
+}
+
 /// Render one hit with its match tier, so she can tell a strong match from a
 /// marginal one instead of treating every returned row as equally fitting.
 fn render_hit(score: f64, row: &crate::store::StickerRecord) -> String {
@@ -228,19 +253,26 @@ pub async fn call_search(
             .collect(),
         None => Vec::new(),
     };
-    let hits = top_matches(&query, rows, limit, &recent);
+    let hits = top_matches(&query, rows.clone(), limit, &recent);
     if hits.is_empty() {
+        let picks = fallback_picks(rows, &recent, FALLBACK_PICKS);
         let _ = store
             .audit(
                 "agent",
-                &format!("mcp.sticker_search.empty.q{keyword}"),
+                &format!("mcp.sticker_search.fallback.q{keyword}.n{}", picks.len()),
                 Some(bot_id),
                 group_id,
                 now,
             )
             .await;
+        let mut lines = vec![crate::memory::stickers::FALLBACK_HEADER.to_string()];
+        lines.extend(
+            picks
+                .iter()
+                .map(|row| format!("{}（匹配：不一定贴切）", render_row(row))),
+        );
         return json!({
-            "content": [{"type": "text", "text": crate::memory::stickers::NO_STICKERS}],
+            "content": [{"type": "text", "text": lines.join("\n")}],
             "isError": false
         });
     }
@@ -400,6 +432,24 @@ mod tests {
             &[],
         );
         assert!(hits.is_empty(), "got {hits:?}");
+    }
+
+    #[test]
+    fn a_fruitless_search_falls_back_to_unseen_stickers_first() {
+        let mut fresh = row("fresh", "", "晚安");
+        fresh.last_seen_at = Some(10);
+        let mut seen = row("seen", "", "早安");
+        seen.last_seen_at = Some(99);
+        let mut older = row("older", "", "睡前");
+        older.last_seen_at = Some(5);
+        let picks = fallback_picks(
+            vec![seen.clone(), older.clone(), fresh.clone()],
+            &["seen".to_string()],
+            2,
+        );
+        let order: Vec<&str> = picks.iter().map(|r| r.hash.as_str()).collect();
+        assert_eq!(order, vec!["fresh", "older"]);
+        assert!(fallback_picks(Vec::new(), &[], 3).is_empty());
     }
 
     #[test]

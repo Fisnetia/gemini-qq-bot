@@ -2238,19 +2238,22 @@ async fn sticker_offers_admit_the_weak_band_that_search_rejects() {
     seed_library_row(&store, "bbbb2222cccc", "", "", "", true).await;
     // A row tagged before the description change: its signal sits in the legacy
     // `scene` column, which is exactly the shape production databases still hold.
-    sqlx::query("UPDATE stickers SET scene = '午休室里', search_blob = '午休室里' WHERE hash = 'bbbb2222cccc'")
-            .execute(store.pool())
-            .await
-            .expect("写旧行");
+    sqlx::query(
+        "UPDATE stickers SET scene = '午休', search_blob = '午休' WHERE hash = 'bbbb2222cccc'",
+    )
+    .execute(store.pool())
+    .await
+    .expect("写旧行");
 
-    // "中午休息" (3 bigrams) shares exactly one with the scene "午休室里"
-    // (3 bigrams): 2*1/6 * W_SCENE 0.8 = 0.267. Inside 0.25..0.35 — too
-    // weak to search, good enough to offer.
+    // "中午休息呗" (4 bigrams) shares exactly one with the scene "午休" (1
+    // bigram): 2*1/5 * W_SCENE 0.8 = 0.32. Only 2 of its 5 characters appear
+    // there, under the half needed for character hits to count. Inside
+    // 0.25..0.35 — too weak to search, good enough to offer.
     let weak = crate::memory::stickers::score_text(
-        "中午休息",
+        "中午休息呗",
         &crate::memory::stickers::StickerText {
             ocr: "",
-            scene: "午休室里",
+            scene: "午休",
             emotion: "",
             intent: "",
             usage_hint: "",
@@ -2263,7 +2266,7 @@ async fn sticker_offers_admit_the_weak_band_that_search_rejects() {
     );
     assert_eq!(crate::memory::stickers::match_tier(weak), None);
 
-    let messages = vec![message("m1", "u1", "中午休息", 0)];
+    let messages = vec![message("m1", "u1", "中午休息呗", 0)];
     let offers = executor.select_sticker_offers(&[], &messages).await;
     assert_eq!(offers.len(), 1, "offers: {offers:?}");
     assert_eq!(offers[0].hash, "bbbb2222cccc");

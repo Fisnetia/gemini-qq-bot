@@ -154,11 +154,17 @@ pub async fn phash_async(bytes: Vec<u8>) -> Option<u64> {
 
 /// Character-bigram Dice similarity between two descriptions, in `0.0..=1.0`.
 ///
-/// Same measure as [`score_text`] uses per field, applied to a whole paragraph: the
-/// point is "did the tagger say the same thing twice", not a ranked query match.
+/// The point is "did the tagger say the same thing twice", not a ranked query match,
+/// so it keeps the plain whole-paragraph bigrams: the keyword splitting and
+/// single-character hits that search uses would make different pictures look alike.
 pub fn description_similarity(left: &str, right: &str) -> f64 {
-    let grams = bigrams(left);
-    overlap(&grams, right)
+    let left = bigrams(left);
+    let right = bigrams(right);
+    if left.is_empty() || right.is_empty() {
+        return 0.0;
+    }
+    let shared = left.iter().filter(|g| right.contains(g)).count();
+    (2.0 * shared as f64) / ((left.len() + right.len()) as f64)
 }
 
 /// Score at or above which two descriptions are treated as the same picture.
@@ -323,12 +329,77 @@ fn bigrams(text: &str) -> Vec<String> {
     chars.windows(2).map(|w| w.iter().collect()).collect()
 }
 
+/// Characters that separate keywords in a search query. The model often joins
+/// keywords with `_` or `、`; read as ordinary characters, they produced bigrams
+/// such as `猫_` that no field can contain, so a query like `猫猫_乖巧_卖萌` could
+/// never match anything (2026-11-08).
+fn is_keyword_separator(c: char) -> bool {
+    c.is_whitespace() || "_、，,。.／/|;；:：!！?？~～·-（）()【】[]\"'“”‘’".contains(c)
+}
+
+/// Character bigrams taken inside each keyword only, never across a separator.
+/// A one-character keyword stands as itself.
+fn search_bigrams(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for segment in text.split(is_keyword_separator).filter(|s| !s.is_empty()) {
+        let chars: Vec<char> = segment.chars().collect();
+        if chars.len() < 2 {
+            out.extend(chars.iter().map(|c| c.to_string()));
+        } else {
+            out.extend(chars.windows(2).map(|w| w.iter().collect::<String>()));
+        }
+    }
+    out
+}
+
+/// Characters too common to say anything about a picture.
+const FILLER_CHARS: &str = "的了是我你他她它们个一这那在有和就也都吗呢吧啊哦呀嘛啦";
+
+/// The distinct meaningful characters of a query.
+fn key_chars(query: &str) -> Vec<char> {
+    let mut chars: Vec<char> = query
+        .chars()
+        .filter(|c| !is_keyword_separator(*c) && !FILLER_CHARS.contains(*c))
+        .collect();
+    chars.sort_unstable();
+    chars.dedup();
+    chars
+}
+
+/// Weight of a single-character hit relative to a bigram hit. Bigrams alone
+/// missed near-misses such as `猫猫` against a description saying `白猫`; single
+/// characters catch those, at half the weight so a real phrase match still
+/// ranks first.
+const CHAR_HIT_WEIGHT: f64 = 0.5;
+
+/// Below this share of the query's characters, single-character hits count for
+/// nothing. Checked against the live library: one stray shared character, such
+/// as `头` in `歪头_问号` against `镜头`, otherwise ranked unrelated pictures as
+/// matches.
+const CHAR_COVERAGE_MIN: f64 = 0.5;
+
+/// Share of the query's meaningful characters that appear in the field, in
+/// `0.0..=1.0`, or zero below [`CHAR_COVERAGE_MIN`]. Measured against the query,
+/// not the field, so a long description is not penalised for being long.
+fn char_coverage(chars: &[char], field: &str) -> f64 {
+    if chars.is_empty() || field.trim().is_empty() {
+        return 0.0;
+    }
+    let hits = chars.iter().filter(|c| field.contains(**c)).count();
+    let coverage = hits as f64 / chars.len() as f64;
+    if coverage < CHAR_COVERAGE_MIN {
+        0.0
+    } else {
+        coverage
+    }
+}
+
 /// Dice coefficient over character bigrams, in `0.0..=1.0`.
 fn overlap(query: &[String], field: &str) -> f64 {
     if query.is_empty() || field.trim().is_empty() {
         return 0.0;
     }
-    let target = bigrams(field);
+    let target = search_bigrams(field);
     if target.is_empty() {
         return 0.0;
     }
@@ -336,22 +407,27 @@ fn overlap(query: &[String], field: &str) -> f64 {
     (2.0 * shared as f64) / ((query.len() + target.len()) as f64)
 }
 
-/// Score one sticker's text fields against a query: weighted char-bigram
-/// Dice per field, summed. THE scoring implementation for the whole crate —
-/// `sticker_search` and the server-side preselection both call this.
+/// Score one sticker's text fields against a query: per field, the bigram
+/// Dice plus a half-weight share of single-character hits, weighted and
+/// summed. THE scoring implementation for the whole crate — `sticker_search`
+/// and the server-side preselection both call this.
 ///
 /// Deliberately not a filter: a zero score is returned as 0.0 so the caller
 /// applies [`SEARCH_MIN_SCORE`] and decides what "nothing relevant" means.
 pub fn score_text(query: &str, text: &StickerText<'_>) -> f64 {
-    let grams = bigrams(query);
+    let grams = search_bigrams(query);
     if grams.is_empty() {
         return 0.0;
     }
-    W_OCR * overlap(&grams, text.ocr)
-        + W_USAGE * overlap(&grams, text.usage_hint)
-        + W_INTENT * overlap(&grams, text.intent)
-        + W_EMOTION * overlap(&grams, text.emotion)
-        + W_SCENE * overlap(&grams, text.scene)
+    let chars = key_chars(query);
+    let field = |weight: f64, value: &str| {
+        weight * (overlap(&grams, value) + CHAR_HIT_WEIGHT * char_coverage(&chars, value))
+    };
+    field(W_OCR, text.ocr)
+        + field(W_USAGE, text.usage_hint)
+        + field(W_INTENT, text.intent)
+        + field(W_EMOTION, text.emotion)
+        + field(W_SCENE, text.scene)
 }
 
 /// Score one draft against a query. Kept as a thin delegate so existing
@@ -363,6 +439,9 @@ pub fn score(query: &str, draft: &StickerDraft) -> f64 {
 /// The answer when nothing matched. Fixed text, so an empty result never leaks the
 /// library's size or its contents.
 pub const NO_STICKERS: &str = "表情库里没有合适的图。";
+
+/// The first line of a fruitless search's fallback offer.
+pub const FALLBACK_HEADER: &str = "没找到贴切的。下面几张是库里随手挑的，不一定合适：合适就发，不合适就别发，也别说表情库是空的。";
 
 #[cfg(test)]
 mod tests {
@@ -507,12 +586,13 @@ mod tests {
     fn a_legacy_record_keeps_scoring_on_its_old_fields() {
         let mut stored = record("h", "不许摸鱼", "");
         stored.usage_hint = "上班时表达无奈".into();
-        // "摸鱼" is one query bigram against "不许摸鱼" (three) → Dice 0.5, so the ocr
-        // slot alone contributes W_OCR * 0.5. The point of the assertion is that no
-        // description slot is invented for a legacy row.
+        // "摸鱼" is one query bigram against "不许摸鱼" (three) → Dice 0.5, and both of
+        // its characters appear there → full character coverage, so the ocr slot
+        // alone contributes W_OCR * (0.5 + CHAR_HIT_WEIGHT). The point of the
+        // assertion is that no description slot is invented for a legacy row.
         assert_eq!(
             score_text("摸鱼", &stored.text()),
-            W_OCR * 0.5 + W_USAGE * 0.0,
+            W_OCR * (0.5 + CHAR_HIT_WEIGHT) + W_USAGE * 0.0,
             "legacy rows must not gain or lose weight from the description change"
         );
         assert!(score_text("上班时", &stored.text()) > 0.0);
@@ -528,6 +608,22 @@ mod tests {
         // the B1 promise that search may honestly find nothing.
         let d = draft("h", "不许摸鱼", "白猫趴在键盘上");
         assert_eq!(match_tier(score("量子力学考试", &d)), None);
+    }
+
+    /// From the 2026-11-08 queries: keywords joined with `_`, and a near-miss on
+    /// the description wording. Both used to score exactly zero.
+    #[test]
+    fn joined_keywords_and_near_misses_now_match() {
+        let cat = draft("h", "", "飞机耳瞪眼咧嘴傻笑的白猫");
+        assert!(match_tier(score("猫猫", &cat)).is_some());
+        assert!(match_tier(score("傻笑_白猫", &cat)).is_some());
+        // Separators never form bigrams.
+        assert!(!search_bigrams("猫猫_乖巧").iter().any(|g| g.contains('_')));
+        // Filler characters alone are not a match.
+        assert_eq!(match_tier(score("的了吗", &cat)), None);
+        // One stray shared character in a longer query is not a match either.
+        let rabbit = draft("r", "", "棕白宠物兔跑向镜头并贴脸回旋");
+        assert_eq!(match_tier(score("歪头_问号", &rabbit)), None);
     }
 
     #[test]
