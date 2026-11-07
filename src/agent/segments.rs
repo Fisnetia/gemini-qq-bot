@@ -9,9 +9,12 @@
 pub const MAX_REPLY_PARTS: usize = 8;
 
 /// Shortest pause between two outgoing messages, in milliseconds.
-pub const MIN_GAP_MS: u64 = 800;
+pub const MIN_GAP_MS: u64 = 1_500;
 /// Longest pause between two outgoing messages, in milliseconds.
-pub const MAX_GAP_MS: u64 = 1_400;
+pub const MAX_GAP_MS: u64 = 5_000;
+/// Pause added per character of the next message: roughly how long a person
+/// takes to type it on a phone.
+pub const GAP_PER_CHAR_MS: u64 = 150;
 
 /// Turn model output into the messages that will actually be sent.
 ///
@@ -76,14 +79,17 @@ pub fn finalize_reply_with_quotes(
 /// Pauses after each part except the last. A single part yields an empty list,
 /// so the caller does not sleep after the final message.
 ///
-/// The pause grows with the previous part's length and stays inside 800..=1400.
+/// The pause before a part grows with that part's length, like the time it takes to
+/// type it, and stays inside [`MIN_GAP_MS`]..=[`MAX_GAP_MS`]. The old 0.8–1.4 s,
+/// sized by the part before, made several messages land almost at once
+/// (2026-11-08).
 pub fn message_gaps_ms(parts: &[impl AsRef<str>]) -> Vec<u64> {
     parts
         .windows(2)
         .map(|pair| {
-            let chars = pair[0].as_ref().chars().count() as u64;
+            let chars = pair[1].as_ref().chars().count() as u64;
             MIN_GAP_MS
-                .saturating_add(chars.saturating_mul(12))
+                .saturating_add(chars.saturating_mul(GAP_PER_CHAR_MS))
                 .min(MAX_GAP_MS)
         })
         .collect()
@@ -259,8 +265,8 @@ mod tests {
         let parts = ["啊", &"字".repeat(80), "尾"];
         let gaps = message_gaps_ms(&parts);
         assert_eq!(gaps.len(), 2);
-        assert_eq!(gaps[0], MIN_GAP_MS + 12);
-        assert_eq!(gaps[1], MAX_GAP_MS);
+        assert_eq!(gaps[0], MAX_GAP_MS);
+        assert_eq!(gaps[1], MIN_GAP_MS + GAP_PER_CHAR_MS);
         assert!(
             gaps.iter()
                 .all(|gap| (MIN_GAP_MS..=MAX_GAP_MS).contains(gap))
@@ -446,21 +452,21 @@ mod tests {
     }
 
     #[test]
-    fn gaps_are_computed_from_the_previous_part_only() {
-        // Each gap is decided by the part BEFORE it, so a long tail does not stretch
-        // the earlier pauses.
+    fn a_gap_is_the_time_to_type_the_next_part() {
+        // Each pause is decided by the part AFTER it: the time to type that message.
         let parts = ["字".repeat(60), "短".to_string(), "字".repeat(100)];
         let gaps = message_gaps_ms(&parts);
         assert_eq!(gaps.len(), 2);
-        assert_eq!(gaps[0], MAX_GAP_MS, "60 字应当顶格");
-        // The second gap follows the one-character middle part, not the long one
-        // before it: each pause belongs to the message that precedes it.
-        assert_eq!(gaps[1], MIN_GAP_MS + 12);
+        assert_eq!(gaps[0], MIN_GAP_MS + GAP_PER_CHAR_MS, "下一条只有 1 个字");
+        assert_eq!(gaps[1], MAX_GAP_MS, "下一条 100 字应当顶格");
     }
 
     #[test]
     fn a_gap_is_never_below_the_floor_for_a_one_char_part() {
-        assert_eq!(message_gaps_ms(&["啊", "哦"]), vec![MIN_GAP_MS + 12]);
+        assert_eq!(
+            message_gaps_ms(&["啊", "哦"]),
+            vec![MIN_GAP_MS + GAP_PER_CHAR_MS]
+        );
         // Empty parts still produce a floor-length gap; the caller decided to send two
         // messages and the floor is the floor.
         assert_eq!(message_gaps_ms(&["", ""]), vec![MIN_GAP_MS]);
@@ -472,12 +478,12 @@ mod tests {
 
     #[test]
     fn gaps_scale_linearly_between_the_bounds() {
-        // 800 + n*12, so 10 chars is 920 and 50 chars is exactly the 1400 ceiling.
-        let gap_for = |n: usize| message_gaps_ms(&["字".repeat(n), "x".to_string()])[0];
+        // 1500 + n*150, so 10 chars is 3000 and 24 chars reaches past the 5000 ceiling.
+        let gap_for = |n: usize| message_gaps_ms(&["x".to_string(), "字".repeat(n)])[0];
         assert_eq!(gap_for(0), MIN_GAP_MS);
-        assert_eq!(gap_for(10), MIN_GAP_MS + 120);
-        assert_eq!(gap_for(49), MAX_GAP_MS - 12);
-        assert_eq!(gap_for(50), MAX_GAP_MS);
+        assert_eq!(gap_for(10), MIN_GAP_MS + 10 * GAP_PER_CHAR_MS);
+        assert_eq!(gap_for(23), MIN_GAP_MS + 23 * GAP_PER_CHAR_MS);
+        assert_eq!(gap_for(24), MAX_GAP_MS);
         assert_eq!(gap_for(500), MAX_GAP_MS);
     }
 
