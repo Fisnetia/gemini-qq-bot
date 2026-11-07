@@ -317,14 +317,24 @@ impl TurnExecutor {
                                 steps,
                                 drafts,
                                 i64::from(inserts),
-                                last_insert_at,
+                                insert_landed_at(&parsed.events, &spec)
+                                    .unwrap_or(last_insert_at as f64),
                                 &coverage,
                                 prompt_rejected,
                                 first_turn_nudged,
                             )
                             .await
                         {
-                            SubmissionOutcome::Wait => {}
+                            SubmissionOutcome::Wait => {
+                                // The MCP channel delivers submissions only. Falling
+                                // through here sent the barrier's last agent text —
+                                // the model's own aside — to the group (2026-11-07).
+                                tokio::time::sleep(std::time::Duration::from_millis(
+                                    limits.poll_ms.max(50),
+                                ))
+                                .await;
+                                continue;
+                            }
                             SubmissionOutcome::Nudge => {
                                 match session
                                     .deliver(first_turn_nudge_prompt(self.output_channel))
@@ -668,7 +678,8 @@ impl TurnExecutor {
                                 steps,
                                 drafts,
                                 i64::from(inserts),
-                                last_insert_at,
+                                insert_landed_at(&parsed.events, &spec)
+                                    .unwrap_or(last_insert_at as f64),
                                 &coverage,
                                 texts_show_prompt_rejection(
                                     parsed.events.iter().map(|e| e.text.as_str()),
@@ -842,7 +853,7 @@ impl TurnExecutor {
         steps: i64,
         drafts: i64,
         inserts: i64,
-        last_insert_at: i64,
+        insert_at: f64,
         coverage: &ResidentCoverage,
         prompt_rejected: bool,
         already_nudged: bool,
@@ -937,7 +948,21 @@ impl TurnExecutor {
         };
         // The settle second keeps a just-landed call from being committed
         // while the model is still mid-gesture after it.
-        if candidate.created_at < last_insert_at || crate::now_unix() - candidate.created_at < 1 {
+        if !submission_is_fresh(candidate.created_at, insert_at) {
+            // The newest submission predates a message inserted into this turn.
+            // Ask once for a resubmission; otherwise keep waiting for one.
+            if submission_nudge_due(already_nudged) {
+                manager
+                    .audit(
+                        &job.group_id,
+                        &format!("resident.turn.stale_submission.nudge.g{}", job.group_id),
+                    )
+                    .await;
+                return SubmissionOutcome::Nudge;
+            }
+            return SubmissionOutcome::Wait;
+        }
+        if crate::now_unix() - candidate.created_at < 1 {
             return SubmissionOutcome::Wait;
         }
         if steps >= RESIDENT_STEP_ROTATE_LIMIT && payload_is_bare_refusal(&candidate.payload) {

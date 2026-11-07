@@ -947,6 +947,36 @@ fn only_empty_and_malformed_contracts_retire_the_session() {
     assert!(!failure_retires_session("contract_invalid.too_long"));
 }
 
+fn step(idx: i64, kind: &str, ts: Option<f64>) -> crate::agent::step_stream::StepEvent {
+    crate::agent::step_stream::StepEvent {
+        idx,
+        kind: kind.to_string(),
+        text: String::new(),
+        tool: String::new(),
+        task_id: String::new(),
+        ts,
+        raw_type: 0,
+    }
+}
+
+#[test]
+fn an_insert_lands_when_its_step_says_not_when_it_was_noticed() {
+    let events = vec![
+        step(20, "user", Some(1_000.2)),
+        step(25, "user", Some(1_077.7)),
+        step(26, "tool_call", Some(1_085.1)),
+    ];
+    let spec = TurnSpec::new(20).with_inserts([25]);
+    assert_eq!(insert_landed_at(&events, &spec), Some(1_077.7));
+    assert_eq!(insert_landed_at(&events, &TurnSpec::new(20)), None);
+
+    // The 2026-11-07 turn: resubmitted at 1085, the insert landed at 1077.7,
+    // and the driver noticed it only after 1085.
+    assert!(submission_is_fresh(1_085, 1_077.7));
+    assert!(submission_is_fresh(1_077, 1_077.7));
+    assert!(!submission_is_fresh(1_076, 1_077.7));
+}
+
 #[test]
 fn submission_nudge_due_on_the_first_miss_of_any_turn() {
     assert!(submission_nudge_due(false));

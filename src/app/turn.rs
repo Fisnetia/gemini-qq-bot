@@ -322,6 +322,28 @@ fn submission_nudge_due(already_nudged: bool) -> bool {
     !already_nudged
 }
 
+/// When the newest absorbed insert actually landed, from the step's own
+/// timestamp. The driver only learns of an insert on a later poll, so its
+/// own clock can run seconds behind the step: judging submissions by that
+/// clock threw away a fresh resubmission and shipped the model's aside
+/// instead (2026-11-07). `None` when no insert carries a timestamp.
+fn insert_landed_at(
+    events: &[crate::agent::step_stream::StepEvent],
+    spec: &TurnSpec,
+) -> Option<f64> {
+    events
+        .iter()
+        .filter(|e| spec.insert_idxs.contains(&e.idx))
+        .filter_map(|e| e.ts)
+        .reduce(f64::max)
+}
+
+/// Whether a submission was made after the newest insert landed. Submission
+/// times are whole seconds, so one in the same second as the insert counts.
+fn submission_is_fresh(created_at: i64, insert_at: f64) -> bool {
+    created_at as f64 >= insert_at.floor()
+}
+
 /// A no-submission death arms the one-shot replay only for an opted-in
 /// group, and never for a job that is itself the replay: a second death
 /// falls back to the plain release-and-merge behaviour (2026-10-29).
