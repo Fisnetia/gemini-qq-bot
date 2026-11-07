@@ -96,6 +96,48 @@ pub fn fit_for_sticker(bytes: &[u8]) -> Option<Vec<u8>> {
     Some(encoded)
 }
 
+/// Longest edge of a panel thumbnail, in pixels. The panel shows stickers at 96 px,
+/// so this is enough for a sharp picture on a high-density screen.
+pub const STICKER_THUMB_EDGE: u32 = 192;
+
+/// A small preview of a sticker for the admin panel: the first frame, shrunk to
+/// fit `max_edge`, as PNG when it has transparency and JPEG otherwise. Library
+/// files can be 2 MB GIFs, and the panel used to download every one of them in
+/// full just to draw a 96 px tile (2026-11-08).
+pub fn sticker_thumbnail(bytes: &[u8], max_edge: u32) -> Option<(Vec<u8>, &'static str)> {
+    let image = image::load_from_memory(bytes).ok()?;
+    let image = if image.width() > max_edge || image.height() > max_edge {
+        image.thumbnail(max_edge, max_edge)
+    } else {
+        image
+    };
+    let mut buf = Vec::new();
+    if has_transparency(&image) {
+        use image::ImageEncoder;
+        let rgba = image.to_rgba8();
+        image::codecs::png::PngEncoder::new(&mut buf)
+            .write_image(
+                rgba.as_raw(),
+                rgba.width(),
+                rgba.height(),
+                image::ExtendedColorType::Rgba8,
+            )
+            .ok()?;
+        Some((buf, "image/png"))
+    } else {
+        let rgb = image.to_rgb8();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 82)
+            .encode(
+                rgb.as_raw(),
+                rgb.width(),
+                rgb.height(),
+                image::ExtendedColorType::Rgb8,
+            )
+            .ok()?;
+        Some((buf, "image/jpeg"))
+    }
+}
+
 /// Whether any pixel is not fully opaque. A decoder may hand back RGBA for a
 /// picture that has no transparency at all (every GIF does), so the channel
 /// alone does not decide.
@@ -232,6 +274,46 @@ pub async fn prepare_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn encode(img: image::RgbaImage, format: image::ImageFormat) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut std::io::Cursor::new(&mut bytes), format)
+            .expect("编码");
+        bytes
+    }
+
+    #[test]
+    fn a_thumbnail_is_small_and_keeps_transparency_only_when_there_is_some() {
+        let clear = encode(
+            image::RgbaImage::from_fn(800, 400, |x, _| image::Rgba([200, 10, 10, (x % 256) as u8])),
+            image::ImageFormat::Png,
+        );
+        let (thumb, kind) = sticker_thumbnail(&clear, STICKER_THUMB_EDGE).expect("能生成");
+        assert_eq!(kind, "image/png");
+        let decoded = image::load_from_memory(&thumb).expect("能解码");
+        assert_eq!((decoded.width(), decoded.height()), (192, 96));
+        assert!(decoded.to_rgba8().pixels().any(|p| p.0[3] < 255));
+
+        let opaque = encode(
+            image::RgbaImage::from_pixel(600, 600, image::Rgba([1, 2, 3, 255])),
+            image::ImageFormat::Png,
+        );
+        let (thumb, kind) = sticker_thumbnail(&opaque, STICKER_THUMB_EDGE).expect("能生成");
+        assert_eq!(kind, "image/jpeg");
+        assert!(thumb.len() < opaque.len());
+
+        // Small pictures are not blown up.
+        let tiny = encode(
+            image::RgbaImage::from_pixel(40, 30, image::Rgba([1, 2, 3, 255])),
+            image::ImageFormat::Png,
+        );
+        let (thumb, _) = sticker_thumbnail(&tiny, STICKER_THUMB_EDGE).expect("能生成");
+        let decoded = image::load_from_memory(&thumb).expect("能解码");
+        assert_eq!((decoded.width(), decoded.height()), (40, 30));
+
+        assert!(sticker_thumbnail(b"not an image", STICKER_THUMB_EDGE).is_none());
+    }
 
     fn prepared(w: u32, h: u32) -> PreparedImage {
         let img = image::RgbaImage::from_pixel(w, h, image::Rgba([10, 20, 30, 255]));

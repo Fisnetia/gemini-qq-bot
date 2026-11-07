@@ -123,6 +123,7 @@ fn shared_routes() -> Router<Arc<AdminState>> {
             patch(patch_sticker).delete(delete_sticker),
         )
         .route("/stickers/{hash}/image", get(sticker_image))
+        .route("/stickers/{hash}/thumb", get(sticker_thumb))
         .route("/outbox/{id}/retry", post(retry_outbox))
         .route("/pending", get(pending_overview))
         .route("/audit", get(audit_log))
@@ -451,6 +452,7 @@ pub fn route_paths() -> Vec<&'static str> {
         "/internal/v1/stickers",
         "/internal/v1/stickers/{hash}",
         "/internal/v1/stickers/{hash}/image",
+        "/internal/v1/stickers/{hash}/thumb",
         "/internal/v1/outbox/{id}/retry",
         "/internal/v1/pending",
         "/internal/v1/audit",
@@ -468,7 +470,7 @@ use self::memories::{create_memory, delete_memory, list_memories, patch_memory};
 use self::ops::{
     compaction_status, pending_overview, reset_session, retry_outbox, start_compaction,
 };
-use self::stickers::{delete_sticker, list_stickers, patch_sticker, sticker_image};
+use self::stickers::{delete_sticker, list_stickers, patch_sticker, sticker_image, sticker_thumb};
 
 #[cfg(test)]
 mod tests;

@@ -282,6 +282,13 @@ textarea {
   margin: 8px 0 2px;
 }
 
+.sticker-thumb {
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+}
+
 .login {
   max-width: 420px;
   margin: 12vh auto 0;

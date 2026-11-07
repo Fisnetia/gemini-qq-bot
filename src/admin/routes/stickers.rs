@@ -22,28 +22,55 @@ pub(super) fn sniff_image_type(bytes: &[u8]) -> Option<&'static str> {
     None
 }
 
-/// Serve one sticker's bytes so the panel can show a thumbnail.
-///
-/// The path is an allowlisted hash, never a filesystem path: the row's `file_path` is read
-/// from the database and the caller cannot influence it, so this is not a file server.
-pub(super) async fn sticker_image(
-    State(state): State<Arc<AdminState>>,
-    AxumPath(hash): AxumPath<String>,
-) -> ApiResult {
+/// Read one sticker's file. The path is an allowlisted hash, never a filesystem path:
+/// the row's `file_path` is read from the database and the caller cannot influence it,
+/// so this is not a file server.
+async fn sticker_bytes(state: &AdminState, hash: &str) -> Result<Vec<u8>, ApiError> {
     if hash.len() != 64 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(ApiError::bad_request("bad_hash"));
     }
     let Some(sticker) = state
         .store
-        .sticker_by_hash(&state.bot_id, &hash)
+        .sticker_by_hash(&state.bot_id, hash)
         .await
         .map_err(|_| ApiError::internal())?
     else {
         return Err(ApiError::not_found("unknown_sticker"));
     };
-    let bytes = tokio::fs::read(&sticker.file_path)
+    tokio::fs::read(&sticker.file_path)
         .await
-        .map_err(|_| ApiError::not_found("sticker_image_missing"))?;
+        .map_err(|_| ApiError::not_found("sticker_image_missing"))
+}
+
+/// Serve a small preview of one sticker for the panel's grid.
+pub(super) async fn sticker_thumb(
+    State(state): State<Arc<AdminState>>,
+    AxumPath(hash): AxumPath<String>,
+) -> ApiResult {
+    let bytes = sticker_bytes(&state, &hash).await?;
+    let (thumb, content_type) = tokio::task::spawn_blocking(move || {
+        crate::media::collage::sticker_thumbnail(&bytes, crate::media::collage::STICKER_THUMB_EDGE)
+    })
+    .await
+    .map_err(|_| ApiError::internal())?
+    .ok_or_else(|| ApiError::not_found("sticker_image_not_an_image"))?;
+    Ok((
+        StatusCode::OK,
+        [
+            ("Content-Type", content_type),
+            ("Cache-Control", "private, max-age=86400"),
+        ],
+        thumb,
+    )
+        .into_response())
+}
+
+/// Serve one sticker's original bytes.
+pub(super) async fn sticker_image(
+    State(state): State<Arc<AdminState>>,
+    AxumPath(hash): AxumPath<String>,
+) -> ApiResult {
+    let bytes = sticker_bytes(&state, &hash).await?;
     // The file is stored under a `.jpg` name whatever the source format was, so the type
     // is read from the magic bytes instead of from the extension. Serving a PNG as
     // image/jpeg would be refused by the browser under `X-Content-Type-Options: nosniff`.

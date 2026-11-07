@@ -14,6 +14,7 @@ export default function Stickers() {
   const [kept, setKept] = useState<string>("");
   const [offset, setOffset] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
   const { data, error, loading, reload } = useFetch(
     () =>
       apiGet<StickersResponse>(
@@ -22,17 +23,24 @@ export default function Stickers() {
     [kept, offset],
   );
 
-  if (loading) return <Loading />;
-  if (error) return <ErrorBox message={error} />;
+  // Only the first load replaces the page. A reload after an action keeps the grid
+  // mounted: unmounting it made every card download its picture again, which on a
+  // slow link left a click looking dead for a long time (2026-11-08).
+  if (loading && !data) return <Loading />;
+  if (error && !data) return <ErrorBox message={error} />;
   const { stickers, total, library_size } = data!;
 
   async function patch(sticker: Sticker, body: Record<string, unknown>, label: string) {
+    setBusy(sticker.hash);
+    setNotice(`处理中…（${sticker.short}）`);
     try {
       await apiSend("PATCH", `/stickers/${sticker.hash}`, body);
       setNotice(`${label}（${sticker.short}）`);
       await reload();
     } catch {
       setNotice("操作失败");
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -62,7 +70,13 @@ export default function Stickers() {
       <Notice text={notice} />
       <div className="sticker-grid">
         {stickers.map((s) => (
-          <StickerCard key={s.hash} sticker={s} onPatch={patch} onReload={reload} />
+          <StickerCard
+            key={s.hash}
+            sticker={s}
+            busy={busy === s.hash}
+            onPatch={patch}
+            onReload={reload}
+          />
         ))}
       </div>
       {stickers.length === 0 && <p className="muted">没有符合条件的表情。</p>}
@@ -88,10 +102,12 @@ export default function Stickers() {
 
 function StickerCard({
   sticker,
+  busy,
   onPatch,
   onReload,
 }: {
   sticker: Sticker;
+  busy: boolean;
   onPatch: (s: Sticker, body: Record<string, unknown>, label: string) => Promise<void>;
   onReload: () => Promise<void>;
 }) {
@@ -99,7 +115,9 @@ function StickerCard({
   useEffect(() => {
     let live = true;
     let url: string | null = null;
-    apiBlobUrl(`/stickers/${sticker.hash}/image`)
+    // The grid loads a small still preview; the original (which can be a 2 MB GIF)
+    // is fetched only when asked for.
+    apiBlobUrl(`/stickers/${sticker.hash}/thumb`)
       .then((u) => {
         url = u;
         if (live) setSrc(u);
@@ -111,10 +129,28 @@ function StickerCard({
     };
   }, [sticker.hash]);
 
+  function openOriginal() {
+    // Open the tab now, while the click still counts as a user action, and point it
+    // at the picture once it has downloaded.
+    const tab = window.open("", "_blank");
+    apiBlobUrl(`/stickers/${sticker.hash}/image`)
+      .then((u) => {
+        if (tab) tab.location.href = u;
+      })
+      .catch(() => tab?.close());
+  }
+
   return (
     <article className="sticker" aria-label={`表情 ${sticker.short}`}>
       {src ? (
-        <img src={src} alt={sticker.description ?? "表情图片"} width={96} height={96} />
+        <button
+          type="button"
+          className="sticker-thumb"
+          onClick={openOriginal}
+          title="在新标签页查看原图（动图会动）"
+        >
+          <img src={src} alt={sticker.description ?? "表情图片"} width={96} height={96} />
+        </button>
       ) : (
         <div className="sticker-placeholder" aria-hidden="true">
           …
@@ -130,17 +166,30 @@ function StickerCard({
         {sticker.enabled ? "" : " · 已停用"}
       </p>
       <div className="actions">
-        <button type="button" onClick={() => void onPatch(sticker, { kept: 1 }, "已收编")}>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void onPatch(sticker, { kept: 1 }, "已收编")}
+        >
           收编
         </button>
-        <button type="button" onClick={() => void onPatch(sticker, { kept: 0 }, "已设为未定")}>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void onPatch(sticker, { kept: 0 }, "已设为未定")}
+        >
           未定
         </button>
-        <button type="button" onClick={() => void onPatch(sticker, { kept: -1 }, "已忽略")}>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void onPatch(sticker, { kept: -1 }, "已忽略")}
+        >
           忽略
         </button>
         <button
           type="button"
+          disabled={busy}
           onClick={() =>
             void onPatch(sticker, { enabled: !sticker.enabled }, sticker.enabled ? "已停用" : "已启用")
           }
