@@ -51,6 +51,21 @@ pub const VISION_IN_FLIGHT: usize = 4;
 /// 120s, which is wrong for something sitting on the reply path.
 pub const VISION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// Per-picture budget in agy mode. One agy session serialises every aux job, so a
+/// picture can queue behind the cadence and relevance checks of the same turn; the
+/// 10 s gateway budget then ran out before the session even reached it, and pictures
+/// it answered in 3 s were reported unseen (2026-11-08).
+pub const VISION_TIMEOUT_AGY: std::time::Duration = std::time::Duration::from_secs(40);
+
+/// The per-picture budget for the aux mode in use.
+fn vision_timeout(mode: &str) -> std::time::Duration {
+    if mode == "agy" {
+        VISION_TIMEOUT_AGY
+    } else {
+        VISION_TIMEOUT
+    }
+}
+
 /// Which published vision model serves picture `index` (0-based).
 fn vision_model(index: usize) -> &'static str {
     VISION_MODELS[index % VISION_MODELS.len()]
@@ -214,6 +229,7 @@ impl Preflight {
             return Vec::new();
         }
         let client = Arc::clone(&self.client);
+        let timeout = vision_timeout(client.mode_name());
         let mut tags: Vec<ImageTag> = stream::iter(images.iter().cloned().enumerate())
             .map(move |(index, url)| {
                 let client = Arc::clone(&client);
@@ -226,7 +242,7 @@ impl Preflight {
                         std::slice::from_ref(&url),
                         None,
                     );
-                    let Ok(Ok(raw)) = tokio::time::timeout(VISION_TIMEOUT, call).await else {
+                    let Ok(Ok(raw)) = tokio::time::timeout(timeout, call).await else {
                         return None;
                     };
                     tag_from_single(&raw, index + 1)
@@ -628,6 +644,13 @@ pub fn resolve_kind(sub_type: Option<&str>, model_kind: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agy_mode_waits_longer_for_a_picture_than_a_gateway() {
+        assert_eq!(vision_timeout("agy"), VISION_TIMEOUT_AGY);
+        assert_eq!(vision_timeout("gateway"), VISION_TIMEOUT);
+        assert!(VISION_TIMEOUT_AGY > VISION_TIMEOUT);
+    }
 
     fn message(name: &str, text: &str, mentions: bool) -> IncomingMessage {
         IncomingMessage {
