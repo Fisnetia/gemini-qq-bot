@@ -528,6 +528,32 @@ async fn clean_rounds_during_the_backoff_do_not_count() {
     );
 }
 
+/// A content-filter refusal waits one short step and leaves the ladder alone, so
+/// what people said in a group cannot walk it into a 30-minute silence.
+#[tokio::test]
+async fn a_content_filter_refusal_does_not_climb_the_ladder() {
+    use crate::app::resident::RESPAWN_BACKOFF_STEPS;
+    let dir = tempfile::tempdir().expect("tmp");
+    let (executor, _store) = executor_fixture(&dir).await;
+    let manager = &executor.resident;
+    let now = crate::now_unix();
+    for _ in 0..5 {
+        let (_, until) = manager.note_content_filter("100", now).await;
+        assert_eq!(until - now, RESPAWN_BACKOFF_STEPS[0]);
+    }
+    assert!(manager.backoff_active("100", now).await);
+    // A real failure afterwards starts from the first rung.
+    let (tier, until) = manager.note_respawn_failure("100", now).await;
+    assert_eq!(tier, 1);
+    assert_eq!(until - now, RESPAWN_BACKOFF_STEPS[0]);
+    // And a refusal does not shorten or advance the rung it finds.
+    let (tier, _) = manager.note_respawn_failure("100", now).await;
+    assert_eq!(tier, 2);
+    let (kept, until) = manager.note_content_filter("100", now).await;
+    assert_eq!(kept, 2);
+    assert_eq!(until - now, RESPAWN_BACKOFF_STEPS[0]);
+}
+
 /// The ladder climbs one rung per consecutive retirement, then stops at
 /// thirty minutes: a permanently broken group costs two spawns an hour instead
 /// of one per flush tick.

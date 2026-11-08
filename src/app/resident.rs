@@ -308,6 +308,24 @@ impl ResidentManager {
         (entry.tier, entry.until)
     }
 
+    /// Arm a short fixed wait after a content-filter refusal, without climbing
+    /// the ladder.
+    ///
+    /// A refusal says something about the chat, not the session: a fresh session
+    /// is healthy, so walking the ladder for it put a group in a 30-minute
+    /// silence for what people happened to say (2026-11-08). Repeated refusals
+    /// of the same batch are already dropped by the poison check.
+    pub async fn note_content_filter(&self, group_id: &str, now: i64) -> (u32, i64) {
+        if !self.respawn_backoff_enabled {
+            self.respawn_backoff.lock().await.remove(group_id);
+            return (0, now);
+        }
+        let mut backoff = self.respawn_backoff.lock().await;
+        let entry = backoff.entry(group_id.to_string()).or_default();
+        entry.until = now + RESPAWN_BACKOFF_STEPS[0];
+        (entry.tier.max(1), entry.until)
+    }
+
     /// Whether the group is still waiting out a respawn deadline.
     ///
     /// The deadline is inclusive in the same direction the probe used to be: the

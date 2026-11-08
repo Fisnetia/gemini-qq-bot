@@ -260,7 +260,12 @@ impl TurnExecutor {
                             )
                             .await;
                         let token = prepared.turn_token.as_deref().unwrap_or_default();
-                        let _ = session.interrupt().await;
+                        // ESC cancels the generation and keeps the session. `interrupt`
+                        // sends SIGINT, which ended agy and cost the group a respawn
+                        // rung for a turn meant to be saved (2026-11-08).
+                        let _ = session
+                            .interrupt_generation(std::time::Duration::from_secs(3))
+                            .await;
                         if session.deliver(&reject_loop_prompt(token)).await.is_err() {
                             return self
                                 .retire_resident(

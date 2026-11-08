@@ -386,7 +386,11 @@ impl TurnExecutor {
         let _ = self.store.release_events(&released).await;
         // Consecutive retirements walk the respawn ladder; the deadline is what
         // keeps a group that fails on every spawn from burning one PTY per tick.
-        let (tier, until) = manager.note_respawn_failure(&job.group_id, now).await;
+        let (tier, until) = if error_class == ErrorClass::ContentFiltered.as_str() {
+            manager.note_content_filter(&job.group_id, now).await
+        } else {
+            manager.note_respawn_failure(&job.group_id, now).await
+        };
         // Tier 0 means the cooldown switch is off and nothing was
         // armed; there is no backoff to put in the audit trail.
         if tier > 0 {
